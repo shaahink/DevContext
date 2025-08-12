@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -12,8 +12,22 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace DevContext.Core
 {
+    public class ExtractionOptions
+    {
+        public bool IncludeMethodSignatures { get; set; } = false; // Default: false to save tokens
+        public string? OutputFilePath { get; set; } = null; // Default: output to console
+        public bool VerboseOutput { get; set; } = false;
+    }
+
     public class GenericDotNetProjectDetector : IProjectDetector
     {
+        private readonly ExtractionOptions _options;
+
+        public GenericDotNetProjectDetector(ExtractionOptions? options = null)
+        {
+            _options = options ?? new ExtractionOptions();
+        }
+
         public string Id => "generic-dotnet";
 
         public bool Detect(string directory)
@@ -25,6 +39,13 @@ namespace DevContext.Core
         public ExtractionResult Extract(string directory)
         {
             var sb = new StringBuilder();
+
+            // LLM Context Header
+            sb.AppendLine("# DevContext - .NET Project Analysis");
+            sb.AppendLine("**Purpose**: This file contains extracted context from a .NET solution to help Large Language Models (LLMs) understand the codebase structure, dependencies, and architecture without needing to analyze individual source files.");
+            sb.AppendLine($"**Generated**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($"**Method Signatures Included**: {(_options.IncludeMethodSignatures ? "Yes" : "No (use --include-signatures for detailed method info)")}");
+            sb.AppendLine();
 
             // Initialize MSBuild
             if (!MSBuildLocator.IsRegistered)
@@ -212,8 +233,110 @@ namespace DevContext.Core
                 sb.AppendLine($"- {folder}");
             }
 
-            // 5. Code Summary with Method Signatures
-            sb.AppendLine("\n# Code Structure & Method Signatures");
+            // 5. Code Summary - Conditional based on options
+            if (_options.IncludeMethodSignatures)
+            {
+                sb.AppendLine("\n# Detailed Code Structure & Method Signatures");
+                ExtractDetailedCodeStructure(sb, directory, excludePatterns);
+            }
+            else
+            {
+                sb.AppendLine("\n# Code Structure Summary (Compact)");
+                ExtractCompactCodeStructure(sb, directory, excludePatterns);
+            }
+
+            // Save to file if specified
+            var result = new ExtractionResult("generic-dotnet", sb.ToString());
+
+            if (!string.IsNullOrEmpty(_options.OutputFilePath))
+            {
+                try
+                {
+                    File.WriteAllText(_options.OutputFilePath, result.Content);
+                    Console.WriteLine($"✅ Context saved to: {_options.OutputFilePath}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Failed to save to file: {ex.Message}");
+                }
+            }
+
+            return result;
+        }
+
+        private void ExtractCompactCodeStructure(StringBuilder sb, string directory, string[] excludePatterns)
+        {
+            var totalLoc = 0;
+            var fullCsFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+                                     .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
+                                     .ToList();
+
+            var typesSummary = new Dictionary<string, List<string>>();
+
+            foreach (var file in fullCsFiles)
+            {
+                try
+                {
+                    var code = File.ReadAllText(file);
+                    totalLoc += code.Split('\n').Length;
+                    var relativePath = Path.GetRelativePath(directory, file);
+
+                    var tree = CSharpSyntaxTree.ParseText(code);
+                    var root = tree.GetRoot();
+
+                    // Extract types in compact format
+                    var fileTypes = new List<string>();
+
+                    // Handle all types (in namespaces and top-level)
+                    var allTypes = root.DescendantNodes()
+                        .Where(n => n is ClassDeclarationSyntax ||
+                                   n is InterfaceDeclarationSyntax ||
+                                   n is EnumDeclarationSyntax ||
+                                   n is StructDeclarationSyntax)
+                        .Cast<BaseTypeDeclarationSyntax>();
+
+                    foreach (var type in allTypes)
+                    {
+                        var typeName = type.Identifier.ValueText;
+                        var typeKind = type switch
+                        {
+                            ClassDeclarationSyntax => "class",
+                            InterfaceDeclarationSyntax => "interface",
+                            EnumDeclarationSyntax => "enum",
+                            StructDeclarationSyntax => "struct",
+                            _ => "type"
+                        };
+
+                        //var memberCount = type.Members.Count;
+                        //var publicMemberCount = type.Members.Count(m =>
+                        //    m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)));
+
+                        //fileTypes.Add($"{typeKind} {typeName} ({memberCount}m/{publicMemberCount}p)");
+                    }
+
+                    if (fileTypes.Any())
+                    {
+                        typesSummary[relativePath] = fileTypes;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Error parsing {file}: {ex.Message}");
+                }
+            }
+
+            // Output compact summary
+            foreach (var kvp in typesSummary.OrderBy(x => x.Key))
+            {
+                sb.AppendLine($"**{kvp.Key}**: {string.Join(", ", kvp.Value)}");
+            }
+
+            sb.AppendLine($"\n**Legend**: (Xm/Yp) = X total members, Y public members");
+            sb.AppendLine($"**Total Lines of Code (approx)**: {totalLoc}");
+        }
+
+        private void ExtractDetailedCodeStructure(StringBuilder sb, string directory, string[] excludePatterns)
+        {
             var totalLoc = 0;
             var fullCsFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
                                      .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
@@ -232,61 +355,34 @@ namespace DevContext.Core
 
                     sb.AppendLine($"\n## File: {relativePath}");
 
+                    // Handle namespaces
                     var namespaces = root.DescendantNodes().OfType<NamespaceDeclarationSyntax>();
                     foreach (var ns in namespaces)
                     {
                         var nsName = ns.Name.ToString();
                         sb.AppendLine($"### Namespace: {nsName}");
-
-                        // Classes
-                        var classes = ns.DescendantNodes().OfType<ClassDeclarationSyntax>();
-                        foreach (var cls in classes)
-                        {
-                            var modifiers = string.Join(" ", cls.Modifiers.Select(m => m.ValueText));
-                            var baseTypes = cls.BaseList?.Types.Select(t => t.ToString()) ?? Enumerable.Empty<string>();
-                            var inheritance = baseTypes.Any() ? $" : {string.Join(", ", baseTypes)}" : "";
-
-                            sb.AppendLine($"#### {modifiers} class {cls.Identifier.Text}{inheritance}");
-                            AppendMembersWithSignatures(sb, cls.Members);
-                        }
-
-                        // Interfaces
-                        var interfaces = ns.DescendantNodes().OfType<InterfaceDeclarationSyntax>();
-                        foreach (var iface in interfaces)
-                        {
-                            var modifiers = string.Join(" ", iface.Modifiers.Select(m => m.ValueText));
-                            sb.AppendLine($"#### {modifiers} interface {iface.Identifier.Text}");
-                            AppendMembersWithSignatures(sb, iface.Members);
-                        }
-
-                        // Enums
-                        var enums = ns.DescendantNodes().OfType<EnumDeclarationSyntax>();
-                        foreach (var en in enums)
-                        {
-                            var modifiers = string.Join(" ", en.Modifiers.Select(m => m.ValueText));
-                            sb.AppendLine($"#### {modifiers} enum {en.Identifier.Text}");
-                            sb.AppendLine($"  - Values: {string.Join(", ", en.Members.Select(m => m.Identifier))}");
-                        }
-
-                        // Structs
-                        var structs = ns.DescendantNodes().OfType<StructDeclarationSyntax>();
-                        foreach (var strct in structs)
-                        {
-                            var modifiers = string.Join(" ", strct.Modifiers.Select(m => m.ValueText));
-                            sb.AppendLine($"#### {modifiers} struct {strct.Identifier.Text}");
-                            AppendMembersWithSignatures(sb, strct.Members);
-                        }
+                        ProcessTypesInContainer(sb, ns);
                     }
 
-                    // Handle classes/interfaces not in explicit namespaces (file-scoped namespaces or global)
-                    var topLevelClasses = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
-                        .Where(c => c.Parent is CompilationUnitSyntax || c.Parent is FileScopedNamespaceDeclarationSyntax);
-
-                    foreach (var cls in topLevelClasses)
+                    // Handle file-scoped namespaces
+                    var fileScopedNamespaces = root.DescendantNodes().OfType<FileScopedNamespaceDeclarationSyntax>();
+                    foreach (var ns in fileScopedNamespaces)
                     {
-                        var modifiers = string.Join(" ", cls.Modifiers.Select(m => m.ValueText));
-                        sb.AppendLine($"#### {modifiers} class {cls.Identifier.Text}");
-                        AppendMembersWithSignatures(sb, cls.Members);
+                        var nsName = ns.Name.ToString();
+                        sb.AppendLine($"### Namespace: {nsName} (file-scoped)");
+                        ProcessTypesInContainer(sb, ns);
+                    }
+
+                    // Handle top-level types (not in any namespace)
+                    var topLevelTypes = root.ChildNodes()
+                        .Where(n => n is ClassDeclarationSyntax ||
+                                   n is InterfaceDeclarationSyntax ||
+                                   n is EnumDeclarationSyntax ||
+                                   n is StructDeclarationSyntax);
+
+                    foreach (var type in topLevelTypes)
+                    {
+                        ProcessType(sb, type);
                     }
                 }
                 catch (Exception ex)
@@ -295,10 +391,54 @@ namespace DevContext.Core
                 }
             }
             sb.AppendLine($"\n**Total Lines of Code (approx)**: {totalLoc}");
+        }
 
-            // Cleanup
-            workspace?.Dispose();
-            return new ExtractionResult("generic-dotnet", sb.ToString());
+        private void ProcessTypesInContainer(StringBuilder sb, SyntaxNode container)
+        {
+            var types = container.ChildNodes()
+                .Where(n => n is ClassDeclarationSyntax ||
+                           n is InterfaceDeclarationSyntax ||
+                           n is EnumDeclarationSyntax ||
+                           n is StructDeclarationSyntax);
+
+            foreach (var type in types)
+            {
+                ProcessType(sb, type);
+            }
+        }
+
+        private void ProcessType(StringBuilder sb, SyntaxNode typeNode)
+        {
+            switch (typeNode)
+            {
+                case ClassDeclarationSyntax cls:
+                    var classModifiers = string.Join(" ", cls.Modifiers.Select(m => m.ValueText));
+                    var baseTypes = cls.BaseList?.Types.Select(t => t.ToString()) ?? Enumerable.Empty<string>();
+                    var inheritance = baseTypes.Any() ? $" : {string.Join(", ", baseTypes)}" : "";
+                    sb.AppendLine($"#### {classModifiers} class {cls.Identifier.Text}{inheritance}");
+                    AppendMembersWithSignatures(sb, cls.Members);
+                    break;
+
+                case InterfaceDeclarationSyntax iface:
+                    var ifaceModifiers = string.Join(" ", iface.Modifiers.Select(m => m.ValueText));
+                    var ifaceBaseTypes = iface.BaseList?.Types.Select(t => t.ToString()) ?? Enumerable.Empty<string>();
+                    var ifaceInheritance = ifaceBaseTypes.Any() ? $" : {string.Join(", ", ifaceBaseTypes)}" : "";
+                    sb.AppendLine($"#### {ifaceModifiers} interface {iface.Identifier.Text}{ifaceInheritance}");
+                    AppendMembersWithSignatures(sb, iface.Members);
+                    break;
+
+                case EnumDeclarationSyntax en:
+                    var enumModifiers = string.Join(" ", en.Modifiers.Select(m => m.ValueText));
+                    sb.AppendLine($"#### {enumModifiers} enum {en.Identifier.Text}");
+                    sb.AppendLine($"  - Values: {string.Join(", ", en.Members.Select(m => m.Identifier))}");
+                    break;
+
+                case StructDeclarationSyntax strct:
+                    var structModifiers = string.Join(" ", strct.Modifiers.Select(m => m.ValueText));
+                    sb.AppendLine($"#### {structModifiers} struct {strct.Identifier.Text}");
+                    AppendMembersWithSignatures(sb, strct.Members);
+                    break;
+            }
         }
 
         private void AppendMembersWithSignatures(StringBuilder sb, SyntaxList<MemberDeclarationSyntax> members)
