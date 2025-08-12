@@ -12,6 +12,7 @@ namespace DevContext.Cli
             if (args.Length == 0)
             {
                 targetDir = Environment.CurrentDirectory;
+               // targetDir = @"c:\Code\DevContext";
             }
 
             if (!System.IO.Directory.Exists(targetDir))

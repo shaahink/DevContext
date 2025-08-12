@@ -174,9 +174,35 @@ namespace DevContext.Core
                 }
             }
 
-            // 3. Folder Structure
-            sb.AppendLine("\n# Source Folder Structure");
+            // 3. Source Files Structure
+            sb.AppendLine("\n# Source Files Structure");
             var excludePatterns = new[] { ".git", ".vs", ".nuke", ".github", "bin", "obj", ".idea", "nupkg", ".packageguard" };
+
+            // Get all .cs files with their relative paths
+            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+                                  .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
+                                  .Select(f => Path.GetRelativePath(directory, f))
+                                  .OrderBy(f => f)
+                                  .ToList();
+
+            // Group by directory for better organization
+            var filesByDirectory = csFiles.GroupBy(f => Path.GetDirectoryName(f) ?? "")
+                                         .OrderBy(g => g.Key);
+
+            foreach (var group in filesByDirectory)
+            {
+                var dirName = string.IsNullOrEmpty(group.Key) ? "Root" : group.Key;
+                sb.AppendLine($"## {dirName}");
+                foreach (var file in group)
+                {
+                    sb.AppendLine($"- {Path.GetFileName(file)}");
+                }
+            }
+
+            sb.AppendLine($"\n**Total Source Files**: {csFiles.Count} .cs files");
+
+            // 4. Folder Structure (Non-source folders)
+            sb.AppendLine("\n# Project Folder Structure");
             var folders = Directory.EnumerateDirectories(directory, "*", SearchOption.AllDirectories)
                                   .Where(f => !excludePatterns.Any(ep => f.Contains($"{Path.DirectorySeparatorChar}{ep}{Path.DirectorySeparatorChar}") || Path.GetFileName(f) == ep))
                                   .Select(f => Path.GetRelativePath(directory, f))
@@ -186,61 +212,81 @@ namespace DevContext.Core
                 sb.AppendLine($"- {folder}");
             }
 
-            // File Metrics
-            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                                  .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
-                                  .ToList();
-            sb.AppendLine($"\n**Source Files**: {csFiles.Count} .cs files");
-
-            // 4. Code Summary
-            sb.AppendLine("\n# Code Summary");
+            // 5. Code Summary with Method Signatures
+            sb.AppendLine("\n# Code Structure & Method Signatures");
             var totalLoc = 0;
-            foreach (var file in csFiles)
+            var fullCsFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+                                     .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
+                                     .ToList();
+
+            foreach (var file in fullCsFiles)
             {
                 try
                 {
                     var code = File.ReadAllText(file);
                     totalLoc += code.Split('\n').Length;
+                    var relativePath = Path.GetRelativePath(directory, file);
 
                     var tree = CSharpSyntaxTree.ParseText(code);
                     var root = tree.GetRoot();
+
+                    sb.AppendLine($"\n## File: {relativePath}");
 
                     var namespaces = root.DescendantNodes().OfType<NamespaceDeclarationSyntax>();
                     foreach (var ns in namespaces)
                     {
                         var nsName = ns.Name.ToString();
-                        sb.AppendLine($"## Namespace: {nsName}");
+                        sb.AppendLine($"### Namespace: {nsName}");
 
                         // Classes
                         var classes = ns.DescendantNodes().OfType<ClassDeclarationSyntax>();
                         foreach (var cls in classes)
                         {
-                            sb.AppendLine($"### Class: {cls.Identifier.Text}");
-                            AppendMembers(sb, cls.Members);
+                            var modifiers = string.Join(" ", cls.Modifiers.Select(m => m.ValueText));
+                            var baseTypes = cls.BaseList?.Types.Select(t => t.ToString()) ?? Enumerable.Empty<string>();
+                            var inheritance = baseTypes.Any() ? $" : {string.Join(", ", baseTypes)}" : "";
+
+                            sb.AppendLine($"#### {modifiers} class {cls.Identifier.Text}{inheritance}");
+                            AppendMembersWithSignatures(sb, cls.Members);
                         }
 
                         // Interfaces
                         var interfaces = ns.DescendantNodes().OfType<InterfaceDeclarationSyntax>();
                         foreach (var iface in interfaces)
                         {
-                            sb.AppendLine($"### Interface: {iface.Identifier.Text}");
-                            AppendMembers(sb, iface.Members);
+                            var modifiers = string.Join(" ", iface.Modifiers.Select(m => m.ValueText));
+                            sb.AppendLine($"#### {modifiers} interface {iface.Identifier.Text}");
+                            AppendMembersWithSignatures(sb, iface.Members);
                         }
 
                         // Enums
                         var enums = ns.DescendantNodes().OfType<EnumDeclarationSyntax>();
                         foreach (var en in enums)
                         {
-                            sb.AppendLine($"### Enum: {en.Identifier.Text} ({string.Join(", ", en.Members.Select(m => m.Identifier))})");
+                            var modifiers = string.Join(" ", en.Modifiers.Select(m => m.ValueText));
+                            sb.AppendLine($"#### {modifiers} enum {en.Identifier.Text}");
+                            sb.AppendLine($"  - Values: {string.Join(", ", en.Members.Select(m => m.Identifier))}");
                         }
 
                         // Structs
                         var structs = ns.DescendantNodes().OfType<StructDeclarationSyntax>();
                         foreach (var strct in structs)
                         {
-                            sb.AppendLine($"### Struct: {strct.Identifier.Text}");
-                            AppendMembers(sb, strct.Members);
+                            var modifiers = string.Join(" ", strct.Modifiers.Select(m => m.ValueText));
+                            sb.AppendLine($"#### {modifiers} struct {strct.Identifier.Text}");
+                            AppendMembersWithSignatures(sb, strct.Members);
                         }
+                    }
+
+                    // Handle classes/interfaces not in explicit namespaces (file-scoped namespaces or global)
+                    var topLevelClasses = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                        .Where(c => c.Parent is CompilationUnitSyntax || c.Parent is FileScopedNamespaceDeclarationSyntax);
+
+                    foreach (var cls in topLevelClasses)
+                    {
+                        var modifiers = string.Join(" ", cls.Modifiers.Select(m => m.ValueText));
+                        sb.AppendLine($"#### {modifiers} class {cls.Identifier.Text}");
+                        AppendMembersWithSignatures(sb, cls.Members);
                     }
                 }
                 catch (Exception ex)
@@ -255,35 +301,52 @@ namespace DevContext.Core
             return new ExtractionResult("generic-dotnet", sb.ToString());
         }
 
-        private void AppendMembers(StringBuilder sb, SyntaxList<MemberDeclarationSyntax> members)
+        private void AppendMembersWithSignatures(StringBuilder sb, SyntaxList<MemberDeclarationSyntax> members)
         {
             // Constructors
-            var ctors = members.OfType<ConstructorDeclarationSyntax>()
-                               .Where(c => c.Modifiers.Any(SyntaxKind.PublicKeyword))
-                               .Select(c => $"ctor({string.Join(", ", c.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"))})");
-            if (ctors.Any())
-                sb.AppendLine($"  - Constructors: {string.Join("; ", ctors)}");
+            var ctors = members.OfType<ConstructorDeclarationSyntax>();
+            foreach (var ctor in ctors)
+            {
+                var modifiers = string.Join(" ", ctor.Modifiers.Select(m => m.ValueText));
+                var parameters = string.Join(", ", ctor.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"));
+                sb.AppendLine($"  - {modifiers} ctor({parameters})");
+            }
 
-            // Methods
-            var methods = members.OfType<MethodDeclarationSyntax>()
-                                 .Where(m => m.Modifiers.Any(SyntaxKind.PublicKeyword))
-                                 .Select(m => $"{m.ReturnType} {m.Identifier}({string.Join(", ", m.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"))})");
-            if (methods.Any())
-                sb.AppendLine($"  - Methods: {string.Join("; ", methods)}");
+            // Methods (both public and private)
+            var methods = members.OfType<MethodDeclarationSyntax>();
+            foreach (var method in methods)
+            {
+                var modifiers = string.Join(" ", method.Modifiers.Select(m => m.ValueText));
+                var parameters = string.Join(", ", method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"));
+                sb.AppendLine($"  - {modifiers} {method.ReturnType} {method.Identifier}({parameters})");
+            }
 
-            // Properties
-            var props = members.OfType<PropertyDeclarationSyntax>()
-                               .Where(p => p.Modifiers.Any(SyntaxKind.PublicKeyword))
-                               .Select(p => $"{p.Type} {p.Identifier}");
-            if (props.Any())
-                sb.AppendLine($"  - Properties: {string.Join("; ", props)}");
+            // Properties (both public and private)
+            var props = members.OfType<PropertyDeclarationSyntax>();
+            foreach (var prop in props)
+            {
+                var modifiers = string.Join(" ", prop.Modifiers.Select(m => m.ValueText));
+                var accessors = prop.AccessorList?.Accessors.Select(a => a.Keyword.ValueText) ?? Enumerable.Empty<string>();
+                var accessorInfo = accessors.Any() ? $" {{ {string.Join("; ", accessors)} }}" : "";
+                sb.AppendLine($"  - {modifiers} {prop.Type} {prop.Identifier}{accessorInfo}");
+            }
 
-            // Fields
-            var fields = members.OfType<FieldDeclarationSyntax>()
-                                .Where(f => f.Modifiers.Any(SyntaxKind.PublicKeyword))
-                                .Select(f => string.Join(", ", f.Declaration.Variables.Select(v => $"{f.Declaration.Type} {v.Identifier}")));
-            if (fields.Any())
-                sb.AppendLine($"  - Fields: {string.Join("; ", fields)}");
+            // Fields (both public and private)
+            var fields = members.OfType<FieldDeclarationSyntax>();
+            foreach (var field in fields)
+            {
+                var modifiers = string.Join(" ", field.Modifiers.Select(m => m.ValueText));
+                var variables = string.Join(", ", field.Declaration.Variables.Select(v => v.Identifier.ValueText));
+                sb.AppendLine($"  - {modifiers} {field.Declaration.Type} {variables}");
+            }
+
+            // Events
+            var events = members.OfType<EventDeclarationSyntax>();
+            foreach (var evt in events)
+            {
+                var modifiers = string.Join(" ", evt.Modifiers.Select(m => m.ValueText));
+                sb.AppendLine($"  - {modifiers} event {evt.Type} {evt.Identifier}");
+            }
         }
     }
 }
