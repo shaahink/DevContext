@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using DevContext.Core.Extractors;
 using Microsoft.Build.Locator;
@@ -14,10 +17,10 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace DevContext.Core
 {
-
     public class GenericDotNetProjectDetector : IProjectDetector
     {
         private readonly ExtractionOptions _options;
+        private readonly Stopwatch _stopwatch = new();
 
         public GenericDotNetProjectDetector(ExtractionOptions? options = null)
         {
@@ -32,9 +35,17 @@ namespace DevContext.Core
                    Directory.EnumerateFiles(directory, "*.sln", SearchOption.TopDirectoryOnly).Any();
         }
 
-        public ExtractionResult Extract(string directory)
+        public async Task<ExtractionResult> ExtractAsync(string directory, IProgress<ExtractionProgress>? progress = null)
         {
+            _stopwatch.Restart();
             var sb = new StringBuilder();
+
+            // Initialize progress tracking
+            var extractionProgress = new ExtractionProgress
+            {
+                TotalTasks = CountEnabledTasks(),
+                CompletedTasks = 0
+            };
 
             // Initialize MSBuild
             if (!MSBuildLocator.IsRegistered)
@@ -46,6 +57,7 @@ namespace DevContext.Core
             sb.AppendLine("# DevContext - .NET Project Analysis");
             sb.AppendLine($"**Generated**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             sb.AppendLine($"**Token-Compact**: {(_options.TokenCompact ? "ON" : "OFF")}");
+            sb.AppendLine($"**Architecture**: {_options.DetectedArchitecture}");
             sb.AppendLine();
 
             // Load workspace and solution
@@ -53,12 +65,22 @@ namespace DevContext.Core
             MSBuildWorkspace? workspace = null;
             Solution? solution = null;
 
+            UpdateProgress(progress, extractionProgress, "Loading solution...", 5);
+
             if (slnPath != null)
             {
                 try
                 {
                     workspace = MSBuildWorkspace.Create();
-                    solution = workspace.OpenSolutionAsync(slnPath).Result;
+                    solution = await workspace.OpenSolutionAsync(slnPath);
+
+                    // Auto-detect architecture if not set
+                    if (_options.DetectedArchitecture == ArchitectureStyle.Unknown)
+                    {
+                        var featureDetector = new FeatureDetector(_options);
+                        var featureGrouping = await featureDetector.DetectFeaturesAsync(solution);
+                        _options.DetectedArchitecture = featureGrouping.Architecture;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -67,41 +89,95 @@ namespace DevContext.Core
                 }
             }
 
-            // 1. Solution Overview
-            var overviewExtractor = new SolutionOverviewExtractor(_options);
-            sb.Append(overviewExtractor.Extract(directory, solution));
+            // Run extractors in parallel if enabled
+            var extractorTasks = new List<Task<(string name, string content)>>();
 
-            // 2. Dependency Graph
+            // 1. Solution Overview
+            extractorTasks.Add(RunExtractorAsync("Solution Overview", async () =>
+            {
+                var overviewExtractor = new SolutionOverviewExtractor(_options);
+                return await overviewExtractor.ExtractAsync(directory, solution);
+            }, progress, extractionProgress));
+
+            // 2. Feature Grouping (if enabled)
+            if (_options.EnableFeatureGrouping && solution != null)
+            {
+                extractorTasks.Add(RunExtractorAsync("Feature Analysis", async () =>
+                {
+                    var featureDetector = new FeatureDetector(_options);
+                    var features = await featureDetector.DetectFeaturesAsync(solution);
+                    return FormatFeatureGrouping(features);
+                }, progress, extractionProgress));
+            }
+
+            // 3. Dependency Graph
             if (_options.IncludeDependencyGraph)
             {
-                var depExtractor = new DependencyGraphExtractor(_options);
-                sb.Append(depExtractor.Extract(directory, solution));
+                extractorTasks.Add(RunExtractorAsync("Dependency Graph", async () =>
+                {
+                    var depExtractor = new DependencyGraphExtractor(_options);
+                    return await depExtractor.ExtractAsync(directory, solution);
+                }, progress, extractionProgress));
             }
 
-            // 3. Call Graph
+            // 4. Call Graph
             if (_options.IncludeCallGraph && solution != null)
             {
-                var callExtractor = new CallGraphExtractor(_options);
-                sb.Append(callExtractor.Extract(solution));
+                extractorTasks.Add(RunExtractorAsync("Call Graph", async () =>
+                {
+                    var callExtractor = new CallGraphExtractor(_options);
+                    return await callExtractor.ExtractAsync(solution);
+                }, progress, extractionProgress));
             }
 
-            // 4. Code Structure
-            var codeExtractor = new CodeStructureExtractor(_options);
-            sb.Append(codeExtractor.Extract(directory, solution));
+            // 5. Code Structure
+            extractorTasks.Add(RunExtractorAsync("Code Structure", async () =>
+            {
+                var codeExtractor = new CodeStructureExtractor(_options);
+                return await codeExtractor.ExtractAsync(directory, solution);
+            }, progress, extractionProgress));
 
-            // 5. Domain Model (placeholder for future)
+            // 6. Domain Model
             if (_options.IncludeDomainModel)
             {
-                var domainExtractor = new DomainModelExtractor(_options);
-                sb.Append(domainExtractor.Extract(directory, solution));
+                extractorTasks.Add(RunExtractorAsync("Domain Model", async () =>
+                {
+                    var domainExtractor = new DomainModelExtractor(_options);
+                    return await domainExtractor.ExtractAsync(directory, solution);
+                }, progress, extractionProgress));
+            }
+
+            // Wait for all extractors to complete
+            var results = _options.EnableParallelProcessing
+                ? await Task.WhenAll(extractorTasks)
+                : await RunSequentialAsync(extractorTasks);
+
+            // Combine results
+            foreach (var (name, content) in results.OrderBy(r => GetExtractorOrder(r.name)))
+            {
+                sb.Append(content);
             }
 
             // Apply token compression if enabled
             string finalContent = sb.ToString();
             if (_options.TokenCompact)
             {
+                UpdateProgress(progress, extractionProgress, "Compressing output...", 95);
                 var compressor = new TokenCompressor();
-                finalContent = compressor.Compress(finalContent);
+                finalContent = await Task.Run(() => compressor.Compress(finalContent));
+            }
+
+            // Add timing information if enabled
+            if (_options.ShowElapsedTime)
+            {
+                _stopwatch.Stop();
+                finalContent += $"\n\n---\n**Total Time**: {_stopwatch.Elapsed.TotalSeconds:F2}s";
+
+                if (_options.ShowMemoryUsage)
+                {
+                    var memoryMB = GC.GetTotalMemory(false) / (1024 * 1024);
+                    finalContent += $"\n**Memory Used**: {memoryMB}MB";
+                }
             }
 
             // Save to file if specified
@@ -111,7 +187,7 @@ namespace DevContext.Core
             {
                 try
                 {
-                    File.WriteAllText(_options.OutputFilePath, result.Content);
+                    await File.WriteAllTextAsync(_options.OutputFilePath, result.Content);
                     Console.WriteLine($"✅ Context saved to: {_options.OutputFilePath}");
                 }
                 catch (Exception ex)
@@ -120,14 +196,132 @@ namespace DevContext.Core
                 }
             }
 
+            UpdateProgress(progress, extractionProgress, "Complete!", 100);
             workspace?.Dispose();
             return result;
         }
-    }
-}
 
-namespace DevContext.Core.Extractors
-{
+        private async Task<(string name, string content)> RunExtractorAsync(
+            string name,
+            Func<Task<string>> extractor,
+            IProgress<ExtractionProgress>? progress,
+            ExtractionProgress extractionProgress)
+        {
+            UpdateProgress(progress, extractionProgress, $"Extracting {name}...",
+                (extractionProgress.CompletedTasks * 100) / extractionProgress.TotalTasks);
+
+            var content = await extractor();
+
+
+            Interlocked.Increment(ref extractionProgress.CompletedTasks);
+            extractionProgress.ElapsedTime = _stopwatch.Elapsed;
+
+            return (name, content);
+        }
+
+        private async Task<(string name, string content)[]> RunSequentialAsync(
+            List<Task<(string name, string content)>> tasks)
+        {
+            var results = new List<(string name, string content)>();
+            foreach (var task in tasks)
+            {
+                results.Add(await task);
+            }
+            return results.ToArray();
+        }
+
+        private int CountEnabledTasks()
+        {
+            int count = 2; // Overview and Code Structure are always enabled
+            if (_options.EnableFeatureGrouping)
+                count++;
+            if (_options.IncludeDependencyGraph)
+                count++;
+            if (_options.IncludeCallGraph)
+                count++;
+            if (_options.IncludeDomainModel)
+                count++;
+            return count;
+        }
+
+        private int GetExtractorOrder(string name)
+        {
+            return name switch
+            {
+                "Solution Overview" => 1,
+                "Feature Analysis" => 2,
+                "Dependency Graph" => 3,
+                "Call Graph" => 4,
+                "Code Structure" => 5,
+                "Domain Model" => 6,
+                _ => 99
+            };
+        }
+
+        private void UpdateProgress(
+            IProgress<ExtractionProgress>? progress,
+            ExtractionProgress state,
+            string task,
+            double percent)
+        {
+            if (progress == null)
+                return;
+
+            state.CurrentTask = task;
+            state.PercentComplete = percent;
+            state.ElapsedTime = _stopwatch.Elapsed;
+            progress.Report(state);
+        }
+
+        private string FormatFeatureGrouping(FeatureGrouping grouping)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Feature Analysis");
+            sb.AppendLine($"**Architecture Style**: {grouping.Architecture}");
+            sb.AppendLine($"**Features Found**: {grouping.Features.Count}");
+            sb.AppendLine();
+
+            foreach (var feature in grouping.Features.OrderBy(f => f.Key))
+            {
+                sb.AppendLine($"## {feature.Key}");
+
+                if (feature.Value.Endpoints.Any())
+                {
+                    sb.AppendLine("### Endpoints");
+                    foreach (var endpoint in feature.Value.Endpoints)
+                    {
+                        var route = endpoint.Route ?? "N/A";
+                        var method = endpoint.HttpMethod ?? "N/A";
+                        sb.AppendLine($"- `{method} {route}` - {endpoint.Name}");
+                    }
+                }
+
+                if (feature.Value.UseCases.Any())
+                {
+                    sb.AppendLine("### Use Cases");
+                    foreach (var useCase in feature.Value.UseCases)
+                    {
+                        sb.AppendLine($"- {useCase.Name} ({useCase.Type})");
+                    }
+                }
+
+                if (feature.Value.Files.Any() && feature.Value.Files.Count <= 10)
+                {
+                    sb.AppendLine("### Files");
+                    foreach (var file in feature.Value.Files)
+                    {
+                        sb.AppendLine($"- {file}");
+                    }
+                }
+
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+    }
+
+    // Updated extractors to be async
     public class SolutionOverviewExtractor
     {
         private readonly ExtractionOptions _options;
@@ -137,7 +331,7 @@ namespace DevContext.Core.Extractors
             _options = options;
         }
 
-        public string Extract(string directory, Solution? solution)
+        public async Task<string> ExtractAsync(string directory, Solution? solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Solution Overview");
@@ -152,21 +346,25 @@ namespace DevContext.Core.Extractors
                     sb.AppendLine($"**Projects**: {solution.Projects.Count()}");
             }
 
-            // Project analysis
-            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories).ToList();
+            // Parallel project analysis
+            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories)
+                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
+                .ToList();
+
             sb.AppendLine($"**Total .csproj**: {csprojFiles.Count}");
 
-            var frameworks = new HashSet<string>();
-            var runtimeIdentifiers = new HashSet<string>();
-            var analyzers = new HashSet<string>();
+            var frameworks = new ConcurrentBag<string>();
+            var runtimeIdentifiers = new ConcurrentBag<string>();
+            var analyzers = new ConcurrentBag<string>();
             var isCliTool = false;
             var cliCommandName = string.Empty;
 
-            foreach (var csproj in csprojFiles)
+            var tasks = csprojFiles.Select(async csproj =>
             {
                 try
                 {
-                    var doc = XDocument.Load(csproj);
+                    using var stream = File.OpenRead(csproj);
+                    var doc = await XDocument.LoadAsync(stream, LoadOptions.None, CancellationToken.None);
 
                     // Target frameworks
                     var tf = doc.Descendants("TargetFramework").FirstOrDefault()?.Value ??
@@ -210,15 +408,17 @@ namespace DevContext.Core.Extractors
                     if (_options.VerboseOutput)
                         Console.WriteLine($"Warning: Error reading {csproj}: {ex.Message}");
                 }
-            }
+            });
 
-            sb.AppendLine($"**Frameworks**: {string.Join(", ", frameworks)}");
+            await Task.WhenAll(tasks);
+
+            sb.AppendLine($"**Frameworks**: {string.Join(", ", frameworks.Distinct())}");
 
             if (runtimeIdentifiers.Any())
-                sb.AppendLine($"**Runtime IDs**: {string.Join(", ", runtimeIdentifiers)}");
+                sb.AppendLine($"**Runtime IDs**: {string.Join(", ", runtimeIdentifiers.Distinct())}");
 
             if (analyzers.Any())
-                sb.AppendLine($"**Analyzers**: {string.Join(", ", analyzers)}");
+                sb.AppendLine($"**Analyzers**: {string.Join(", ", analyzers.Distinct())}");
 
             sb.AppendLine($"**Type**: {(isCliTool ? $"CLI Tool (cmd: {cliCommandName})" : "Library/App")}");
             sb.AppendLine();
@@ -236,25 +436,28 @@ namespace DevContext.Core.Extractors
             _options = options;
         }
 
-        public string Extract(string directory, Solution? solution)
+        public async Task<string> ExtractAsync(string directory, Solution? solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Dependency Graph");
 
-            var projectDeps = new Dictionary<string, List<string>>();
-            var projectPackages = new Dictionary<string, List<string>>();
+            var projectDeps = new ConcurrentDictionary<string, List<string>>();
+            var projectPackages = new ConcurrentDictionary<string, List<string>>();
 
-            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories).ToList();
+            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories)
+                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
+                .ToList();
 
-            foreach (var csproj in csprojFiles)
+            var tasks = csprojFiles.Select(async csproj =>
             {
                 try
                 {
-                    var doc = XDocument.Load(csproj);
+                    using var stream = File.OpenRead(csproj);
+                    var doc = await XDocument.LoadAsync(stream, LoadOptions.None, CancellationToken.None);
                     var projectName = Path.GetFileNameWithoutExtension(csproj);
 
-                    projectDeps[projectName] = new List<string>();
-                    projectPackages[projectName] = new List<string>();
+                    var deps = new List<string>();
+                    var packages = new List<string>();
 
                     // Project references
                     foreach (var projRef in doc.Descendants("ProjectReference"))
@@ -263,27 +466,32 @@ namespace DevContext.Core.Extractors
                         if (!string.IsNullOrEmpty(refPath))
                         {
                             var refName = Path.GetFileNameWithoutExtension(refPath);
-                            projectDeps[projectName].Add(refName);
+                            deps.Add(refName);
                         }
                     }
 
-                    // NuGet packages
+                    // NuGet packages - filter out noise
                     foreach (var pkg in doc.Descendants("PackageReference"))
                     {
                         var name = pkg.Attribute("Include")?.Value;
                         var ver = pkg.Attribute("Version")?.Value;
-                        if (!string.IsNullOrEmpty(name))
+                        if (!string.IsNullOrEmpty(name) && !IsNoisePackage(name))
                         {
-                            projectPackages[projectName].Add($"{name}@{ver ?? "latest"}");
+                            packages.Add($"{name}@{ver ?? "latest"}");
                         }
                     }
+
+                    projectDeps[projectName] = deps;
+                    projectPackages[projectName] = packages;
                 }
                 catch (Exception ex)
                 {
                     if (_options.VerboseOutput)
                         Console.WriteLine($"Warning: Error reading {csproj}: {ex.Message}");
                 }
-            }
+            });
+
+            await Task.WhenAll(tasks);
 
             if (_options.UseMermaidForGraphs)
             {
@@ -309,27 +517,43 @@ namespace DevContext.Core.Extractors
                     {
                         sb.AppendLine($"{kvp.Key} -> {string.Join(", ", kvp.Value)}");
                     }
-                    else
-                    {
-                        sb.AppendLine($"{kvp.Key} (standalone)");
-                    }
                 }
 
-                // Top NuGet packages across projects
+                // Top NuGet packages (filtered)
                 var allPackages = projectPackages.SelectMany(p => p.Value)
                     .GroupBy(p => p.Split('@')[0])
-                    .OrderByDescending(g => g.Count());
+                    .Where(g => g.Count() > 1) // Only show packages used by multiple projects
+                    .OrderByDescending(g => g.Count())
+                    .Take(int.MaxValue); // Limit to top 10
 
-
-                sb.AppendLine("\n## Top NuGet Packages");
-                foreach (var pkg in allPackages)
+                if (allPackages.Any())
                 {
-                    sb.AppendLine($"- {pkg.Key} (used by {pkg.Count()} projects)");
+                    sb.AppendLine("\n## Top Shared NuGet Packages");
+                    foreach (var pkg in allPackages)
+                    {
+                        sb.AppendLine($"- {pkg.Key} (used by {pkg.Count()} projects)");
+                    }
                 }
             }
 
             sb.AppendLine();
             return sb.ToString();
+        }
+
+        private bool IsNoisePackage(string packageName)
+        {
+            var noisePatterns = new[]
+            {
+                "Microsoft.NET.Test.Sdk",
+                "xunit",
+                "coverlet",
+                "Microsoft.SourceLink",
+                "Microsoft.CodeAnalysis.Analyzers",
+                "StyleCop",
+                "SonarAnalyzer"
+            };
+
+            return noisePatterns.Any(pattern => packageName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
         }
 
         private string SanitizeForMermaid(string name)
@@ -347,38 +571,42 @@ namespace DevContext.Core.Extractors
             _options = options;
         }
 
-        public string Extract(Solution solution)
+        public async Task<string> ExtractAsync(Solution solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Call Graph");
 
-            var calls = new List<(string caller, string callee)>();
+            var calls = new ConcurrentBag<(string caller, string callee, string feature)>();
 
-            foreach (var project in solution.Projects)
+            // Process projects in parallel
+            var tasks = solution.Projects.Select(async project =>
             {
-                var compilation = project.GetCompilationAsync().Result;
+                var compilation = await project.GetCompilationAsync();
                 if (compilation == null)
-                    continue;
+                    return;
 
-                foreach (var doc in project.Documents)
+                // Process documents in parallel within each project
+                var docTasks = project.Documents.Select(async doc =>
                 {
-                    var tree = doc.GetSyntaxTreeAsync().Result;
+                    var tree = await doc.GetSyntaxTreeAsync();
                     if (tree == null)
-                        continue;
+                        return;
 
-                    var root = tree.GetRoot();
+                    var root = await tree.GetRootAsync();
                     var model = compilation.GetSemanticModel(tree);
 
                     // Find all method declarations
-                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                        .Where(m => !IsTrivialMethod(m));
 
                     foreach (var method in methods)
                     {
                         var methodSymbol = model.GetDeclaredSymbol(method);
-                        if (methodSymbol == null)
+                        if (methodSymbol == null || ShouldExcludeMethod(methodSymbol))
                             continue;
 
                         var callerName = GetFullMethodName(methodSymbol);
+                        var feature = ExtractFeatureFromNamespace(methodSymbol.ContainingNamespace?.ToString() ?? "");
 
                         // Find all invocations within this method
                         var invocations = method.DescendantNodes().OfType<InvocationExpressionSyntax>();
@@ -386,7 +614,7 @@ namespace DevContext.Core.Extractors
                         foreach (var invocation in invocations)
                         {
                             var invokedSymbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-                            if (invokedSymbol == null)
+                            if (invokedSymbol == null || ShouldExcludeMethod(invokedSymbol))
                                 continue;
 
                             // Filter to only track internal calls (within solution)
@@ -394,30 +622,45 @@ namespace DevContext.Core.Extractors
                                 solution.Projects.Any(p => p.AssemblyName == invokedSymbol.ContainingAssembly.Name))
                             {
                                 var calleeName = GetFullMethodName(invokedSymbol);
-                                calls.Add((callerName, calleeName));
+                                calls.Add((callerName, calleeName, feature));
                             }
                         }
                     }
-                }
-            }
+                });
 
-            // Group and display
-            var groupedCalls = calls.GroupBy(c => c.caller)
-                .OrderBy(g => g.Key);
+                await Task.WhenAll(docTasks);
+            });
 
+            await Task.WhenAll(tasks);
 
-            if (_options.UseMermaidForGraphs)
+            // Group by feature if enabled
+            if (_options.EnableFeatureGrouping)
             {
-                sb.AppendLine("```mermaid");
-                sb.AppendLine("graph TD");
-                foreach (var call in calls)
+                var callsByFeature = calls.GroupBy(c => c.feature)
+                    .OrderBy(g => g.Key);
+
+                foreach (var featureGroup in callsByFeature)
                 {
-                    sb.AppendLine($"  {SanitizeForMermaid(call.caller)} --> {SanitizeForMermaid(call.callee)}");
+                    sb.AppendLine($"## {featureGroup.Key}");
+
+                    var featureCalls = featureGroup
+                        .GroupBy(c => c.caller)
+                        .OrderBy(g => g.Key);
+
+                    foreach (var group in featureCalls)
+                    {
+                        var callees = string.Join(", ", group.Select(c => GetShortName(c.callee)).Distinct());
+                        sb.AppendLine($"{GetShortName(group.Key)} -> {callees}");
+                    }
+                    sb.AppendLine();
                 }
-                sb.AppendLine("```");
             }
             else
             {
+                // Regular grouping
+                var groupedCalls = calls.GroupBy(c => c.caller)
+                    .OrderBy(g => g.Key);
+
                 foreach (var group in groupedCalls)
                 {
                     var callees = string.Join(", ", group.Select(c => GetShortName(c.callee)).Distinct());
@@ -427,6 +670,40 @@ namespace DevContext.Core.Extractors
 
             sb.AppendLine();
             return sb.ToString();
+        }
+
+        private bool IsTrivialMethod(MethodDeclarationSyntax method)
+        {
+            var name = method.Identifier.Text;
+            return _options.TrivialMethodPatterns.Any(pattern =>
+                Regex.IsMatch(name, pattern.Replace("*", ".*")));
+        }
+
+        private bool ShouldExcludeMethod(IMethodSymbol method)
+        {
+            var ns = method.ContainingNamespace?.ToString() ?? "";
+            return _options.ExcludeNamespaces.Any(pattern =>
+                pattern.Contains("*")
+                    ? Regex.IsMatch(ns, pattern.Replace("*", ".*"))
+                    : ns.Contains(pattern));
+        }
+
+        private string ExtractFeatureFromNamespace(string ns)
+        {
+            // Try to extract feature from namespace pattern
+            foreach (var pattern in _options.FeaturePatterns)
+            {
+                var regex = new Regex(pattern.Replace("*", @"(\w+)"));
+                var match = regex.Match(ns);
+                if (match.Success && match.Groups.Count > 1)
+                {
+                    return match.Groups[1].Value;
+                }
+            }
+
+            // Fallback to second-level namespace
+            var parts = ns.Split('.');
+            return parts.Length >= 2 ? parts[1] : "Core";
         }
 
         private string GetFullMethodName(IMethodSymbol method)
@@ -441,11 +718,6 @@ namespace DevContext.Core.Extractors
                 return $"{parts[^2]}.{parts[^1]}";
             return fullName;
         }
-
-        private string SanitizeForMermaid(string name)
-        {
-            return name.Replace(".", "_").Replace("-", "_").Replace("<", "").Replace(">", "");
-        }
     }
 
     public class CodeStructureExtractor
@@ -457,83 +729,73 @@ namespace DevContext.Core.Extractors
             _options = options;
         }
 
-        public string Extract(string directory, Solution? solution)
+        public async Task<string> ExtractAsync(string directory, Solution? solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Code Structure");
 
-            var excludePatterns = new[] { ".git", ".vs", ".nuke", ".github", "bin", "obj", ".idea", "nupkg", ".packageguard" };
-
             // File structure
             var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !excludePatterns.Any(ep => f.Contains(ep)))
+                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
                 .Select(f => Path.GetRelativePath(directory, f))
                 .OrderBy(f => f)
                 .ToList();
 
             sb.AppendLine($"**Total Files**: {csFiles.Count} .cs");
 
-            // Group by directory
+            // Group by directory with limit
             var filesByDirectory = csFiles.GroupBy(f => Path.GetDirectoryName(f) ?? "")
-                .OrderBy(g => g.Key);
-            ///; // Limit directories shown
+                .OrderBy(g => g.Key)
+                .Take(int.MaxValue); // Limit directories shown
 
             foreach (var group in filesByDirectory)
             {
                 var dirName = string.IsNullOrEmpty(group.Key) ? "Root" : group.Key;
-                var fileList = string.Join(", ", group.Select(Path.GetFileName));
-                if (group.Count() > 10)
-                    fileList += $" +{group.Count() - 10} more";
+                var files = group.Take(5).Select(Path.GetFileName).ToList();
+                var fileList = string.Join(", ", files);
+
+                if (group.Count() > 5)
+                    fileList += $" ... (+{group.Count() - 5} more)";
+
                 sb.AppendLine($"**{dirName}**: {fileList}");
             }
 
             // Method signatures if requested
             if (_options.IncludeMethodSignatures)
             {
-                sb.AppendLine("\n## Method Signatures");
-                ExtractMethodSignatures(sb, directory, excludePatterns);
-            }
-            else
-            {
-                // Just summary
-                var totalLoc = 0;
-                foreach (var file in csFiles)
-                {
-                    try
-                    {
-                        var fullPath = Path.Combine(directory, file);
-                        totalLoc += File.ReadAllLines(fullPath).Length;
-                    }
-                    catch { }
-                }
-                sb.AppendLine($"\n**Lines of Code**: ~{totalLoc:N0}");
+                sb.AppendLine("\n## Key Method Signatures");
+                await ExtractMethodSignaturesAsync(sb, directory);
             }
 
             sb.AppendLine();
             return sb.ToString();
         }
 
-        private void ExtractMethodSignatures(StringBuilder sb, string directory, string[] excludePatterns)
+        private async Task ExtractMethodSignaturesAsync(StringBuilder sb, string directory)
         {
             var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !excludePatterns.Any(ep => f.Contains(ep)));
+                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
+                .Take(int.MaxValue); // Limit files analyzed
 
-
-            foreach (var file in csFiles)
+            var tasks = csFiles.Select(async file =>
             {
                 try
                 {
-                    var code = File.ReadAllText(file);
+                    var code = await File.ReadAllTextAsync(file);
                     var tree = CSharpSyntaxTree.ParseText(code);
-                    var root = tree.GetRoot();
+                    var root = await tree.GetRootAsync();
                     var relativePath = Path.GetRelativePath(directory, file);
 
-                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                        .Where(m => m.Modifiers.Any(mod => mod.Text == "public") &&
+                                   !IsTrivialMethod(m.Identifier.Text))
+                        .Take(int.MaxValue); // Limit methods per file
+
                     if (!methods.Any())
-                        continue;
+                        return (string.Empty, new List<string>());
 
-                    sb.AppendLine($"\n### {relativePath}");
 
+                    var signatures = new List<string>();
                     foreach (var method in methods)
                     {
                         var modifiers = string.Join(" ", method.Modifiers.Select(m => m.ValueText));
@@ -541,11 +803,36 @@ namespace DevContext.Core.Extractors
                             ? string.Join(",", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))
                             : string.Join(", ", method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"));
 
-                        sb.AppendLine($"- {modifiers} {method.ReturnType} {method.Identifier}({parameters})");
+                        signatures.Add($"- {modifiers} {method.ReturnType} {method.Identifier}({parameters})");
                     }
+
+                    return (relativePath, signatures);
                 }
-                catch { }
+                catch
+                {
+                    return (string.Empty, new List<string>());
+
+                }
+            });
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results.Where(r => r.Item2.Any()))
+            {
+                sb.AppendLine($"\n### {result.Item1}");
+                foreach (var sig in result.Item2)
+                {
+                    sb.AppendLine(sig);
+                }
             }
+        }
+
+
+
+        private bool IsTrivialMethod(string methodName)
+        {
+            return _options.TrivialMethodPatterns.Any(pattern =>
+                Regex.IsMatch(methodName, pattern.Replace("*", ".*")));
         }
     }
 
@@ -558,36 +845,36 @@ namespace DevContext.Core.Extractors
             _options = options;
         }
 
-        public string Extract(string directory, Solution? solution)
+        public async Task<string> ExtractAsync(string directory, Solution? solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Domain Model");
 
-            var excludePatterns = new[] { ".git", ".vs", "bin", "obj", "Test" };
-            var entities = new List<string>();
-            var enums = new List<string>();
-            var dtos = new List<string>();
+            var entities = new ConcurrentBag<string>();
+            var enums = new ConcurrentBag<string>();
+            var dtos = new ConcurrentBag<string>();
 
             var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !excludePatterns.Any(ep => f.Contains(ep)));
+                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)));
 
-
-            foreach (var file in csFiles)
+            var tasks = csFiles.Select(async file =>
             {
                 try
                 {
-                    var code = File.ReadAllText(file);
+                    var code = await File.ReadAllTextAsync(file);
                     var tree = CSharpSyntaxTree.ParseText(code);
-                    var root = tree.GetRoot();
+                    var root = await tree.GetRootAsync();
 
-                    // Find entities (classes ending with Entity, Model, or in Domain namespace)
+                    // Find entities
                     var classes = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
                     foreach (var cls in classes)
                     {
                         var name = cls.Identifier.Text;
-                        if (name.EndsWith("Entity") || name.EndsWith("Model") || name.EndsWith("Domain"))
+                        if (name.EndsWith("Entity") || name.EndsWith("Model") || name.EndsWith("Aggregate"))
                             entities.Add(name);
-                        else if (name.EndsWith("Dto") || name.EndsWith("DTO") || name.EndsWith("Request") || name.EndsWith("Response"))
+                        else if (name.EndsWith("Dto") || name.EndsWith("DTO") ||
+                                name.EndsWith("Request") || name.EndsWith("Response") ||
+                                name.EndsWith("Command") || name.EndsWith("Query"))
                             dtos.Add(name);
                     }
 
@@ -599,133 +886,33 @@ namespace DevContext.Core.Extractors
                     }
                 }
                 catch { }
-            }
+            });
+
+            await Task.WhenAll(tasks);
 
             if (entities.Any())
             {
                 sb.AppendLine("## Entities");
-                foreach (var entity in entities.Distinct().OrderBy(e => e))
+                foreach (var entity in entities.Distinct().OrderBy(e => e).Take(int.MaxValue))
                     sb.AppendLine($"- {entity}");
             }
 
             if (enums.Any())
             {
                 sb.AppendLine("\n## Enums");
-                foreach (var en in enums.Distinct().OrderBy(e => e))
+                foreach (var en in enums.Distinct().OrderBy(e => e).Take(int.MaxValue))
                     sb.AppendLine($"- {en}");
             }
 
             if (dtos.Any())
             {
-                sb.AppendLine("\n## DTOs");
-                foreach (var dto in dtos.Distinct().OrderBy(d => d))
+                sb.AppendLine("\n## DTOs/Commands/Queries");
+                foreach (var dto in dtos.Distinct().OrderBy(d => d).Take(int.MaxValue))
                     sb.AppendLine($"- {dto}");
             }
 
             sb.AppendLine();
             return sb.ToString();
-        }
-    }
-
-    public class TokenCompressor
-    {
-        public string Compress(string content)
-        {
-            // Skip compression if content is small
-            if (content.Length < 1000)
-                return content;
-
-            var compressed = content;
-
-            // 1. Abbreviate common modifiers
-            var modifierMap = new Dictionary<string, string>
-            {
-                { "public ", "pub " },
-                { "private ", "priv " },
-                { "protected ", "prot " },
-                { "internal ", "int " },
-                { "static ", "stat " },
-                { "async ", "async " },
-                { "override ", "ovr " },
-                { "virtual ", "virt " },
-                { "abstract ", "abs " },
-                { "sealed ", "seal " },
-                { "readonly ", "ro " },
-                { "const ", "const " }
-            };
-
-            foreach (var kvp in modifierMap)
-            {
-                compressed = compressed.Replace(kvp.Key, kvp.Value);
-            }
-
-            // 2. Remove redundant phrases
-            compressed = compressed.Replace("file-scoped", "(fs)");
-            compressed = compressed.Replace("Search.AllDirectories", "**");
-            compressed = compressed.Replace("StringComparison.OrdinalIgnoreCase", "OIC");
-            compressed = compressed.Replace("System.", "");
-            compressed = compressed.Replace("Microsoft.CodeAnalysis.", "");
-            compressed = compressed.Replace("Microsoft.", "MS.");
-
-            // 3. Compact whitespace (multiple line breaks to double)
-            compressed = Regex.Replace(compressed, @"\n{3,}", "\n\n");
-
-            // 4. Remove empty sections
-            compressed = Regex.Replace(compressed, @"##[^\n]+\n(?=\n##|\n#|\z)", "");
-
-            // 5. Shorten common patterns
-            compressed = compressed.Replace("**Total", "**Tot");
-            compressed = compressed.Replace("**Root Directory**:", "**Root**:");
-            compressed = compressed.Replace("**Solution File**:", "**Sln**:");
-            compressed = compressed.Replace("**Projects in Solution**:", "**Projs**:");
-            compressed = compressed.Replace("**Target Frameworks**:", "**TFMs**:");
-            compressed = compressed.Replace("**Runtime IDs**:", "**RIDs**:");
-            compressed = compressed.Replace("**Lines of Code**:", "**LOC**:");
-
-            // 6. Compact lists (remove bullet points, use semicolons)
-            compressed = Regex.Replace(compressed, @"^- (.+)$", "$1;", RegexOptions.Multiline);
-            compressed = Regex.Replace(compressed, @";\n(.+);", "; $1;", RegexOptions.Multiline);
-
-            // 7. Remove markdown formatting where not essential
-            compressed = compressed.Replace("```mermaid", "MERMAID:");
-            compressed = compressed.Replace("```", "");
-
-            // 8. Compact method signatures (remove spaces around parentheses and commas)
-            compressed = Regex.Replace(compressed, @"\(\s+", "(");
-            compressed = Regex.Replace(compressed, @"\s+\)", ")");
-            compressed = Regex.Replace(compressed, @"\s*,\s*", ",");
-
-            // 9. Deduplicate repeated patterns
-            var lines = compressed.Split('\n');
-            var uniqueLines = new List<string>();
-            var lastLine = "";
-
-            foreach (var line in lines)
-            {
-                // Skip duplicate adjacent lines
-                if (line != lastLine || string.IsNullOrWhiteSpace(line))
-                {
-                    uniqueLines.Add(line);
-                    lastLine = line;
-                }
-            }
-
-            compressed = string.Join("\n", uniqueLines);
-
-            // 10. Final trim
-            compressed = compressed.Trim();
-
-            // Report compression ratio if verbose
-            var originalSize = content.Length;
-            var compressedSize = compressed.Length;
-            var ratio = (1 - (double)compressedSize / originalSize) * 100;
-
-            if (ratio > 5) // Only report if meaningful compression
-            {
-                Console.WriteLine($"🗜️ Compressed: {originalSize:N0} → {compressedSize:N0} chars ({ratio:F1}% reduction)");
-            }
-
-            return compressed;
         }
     }
 }
