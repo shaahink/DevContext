@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using DevContext.Core;
+using DevContext.Core.Extractors;
 
 namespace DevContext.Cli
 {
@@ -9,7 +10,14 @@ namespace DevContext.Cli
         static void Main(string[] args)
         {
             var targetDir = Environment.CurrentDirectory;
-            var options = new ExtractionOptions();
+
+#if DEBUG
+            targetDir = @"C:\code\github\dntsite";
+#endif
+            var options = new ExtractionOptions
+            {
+                TokenCompact = true // Default to token-saving mode for LLM usage
+            };
 
             // Parse arguments
             for (int i = 0; i < args.Length; i++)
@@ -24,6 +32,33 @@ namespace DevContext.Cli
                     case "--include-signatures":
                     case "-s":
                         options.IncludeMethodSignatures = true;
+                        break;
+
+                    case "--include-dependency-graph":
+                    case "-d":
+                        options.IncludeDependencyGraph = true;
+                        break;
+
+                    case "--include-call-graph":
+                    case "-c":
+                        options.IncludeCallGraph = true;
+                        break;
+
+                    case "--include-domain-model":
+                    case "-m":
+                        options.IncludeDomainModel = true;
+                        break;
+
+                    case "--mermaid-graph":
+                        options.UseMermaidForGraphs = true;
+                        break;
+
+                    case "--token-compact":
+                        options.TokenCompact = true;
+                        break;
+
+                    case "--no-token-compact":
+                        options.TokenCompact = false;
                         break;
 
                     case "--output":
@@ -70,6 +105,15 @@ namespace DevContext.Cli
 
             Console.WriteLine($"🔍 Checking directory: {targetDir}");
             Console.WriteLine($"📝 Method signatures: {(options.IncludeMethodSignatures ? "Included" : "Excluded (use -s to include)")}");
+            Console.WriteLine($"📊 Dependency graph: {(options.IncludeDependencyGraph ? "Included" : "Excluded (use -d to include)")}");
+            Console.WriteLine($"🔗 Call graph: {(options.IncludeCallGraph ? "Included" : "Excluded (use -c to include)")}");
+            Console.WriteLine($"🏛️ Domain model: {(options.IncludeDomainModel ? "Included" : "Excluded (use -m to include)")}");
+            Console.WriteLine($"🗜️ Token compact: {(options.TokenCompact ? "Enabled (optimized for LLMs)" : "Disabled (verbose output)")}");
+
+            if (options.UseMermaidForGraphs && (options.IncludeDependencyGraph || options.IncludeCallGraph))
+            {
+                Console.WriteLine($"📈 Graph format: Mermaid");
+            }
 
             if (!string.IsNullOrEmpty(options.OutputFilePath))
             {
@@ -109,23 +153,30 @@ namespace DevContext.Cli
             Console.WriteLine("  devcontext [directory] [options]");
             Console.WriteLine();
             Console.WriteLine("ARGUMENTS:");
-            Console.WriteLine("  directory    Target directory (default: current directory)");
+            Console.WriteLine("  directory                    Target directory (default: current directory)");
             Console.WriteLine();
             Console.WriteLine("OPTIONS:");
-            Console.WriteLine("  -s, --include-signatures    Include detailed method signatures (increases token count)");
-            Console.WriteLine("  -o, --output <file>         Save output to file instead of console");
-            Console.WriteLine("  -v, --verbose              Enable verbose output");
-            Console.WriteLine("  -h, --help                 Show this help");
+            Console.WriteLine("  -s, --include-signatures     Include detailed method signatures");
+            Console.WriteLine("  -d, --include-dependency-graph  Include project dependency graph");
+            Console.WriteLine("  -c, --include-call-graph     Include method-to-method call mapping");
+            Console.WriteLine("  -m, --include-domain-model   Include domain entities and models");
+            Console.WriteLine("  --mermaid-graph              Output graphs in Mermaid format (default: plain text)");
+            Console.WriteLine("  --token-compact              Enable token-saving mode (DEFAULT: on for LLMs)");
+            Console.WriteLine("  --no-token-compact           Disable token-saving mode for verbose output");
+            Console.WriteLine("  -o, --output <file>          Save output to file instead of console");
+            Console.WriteLine("  -v, --verbose                Enable verbose output");
+            Console.WriteLine("  -h, --help                   Show this help");
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
-            Console.WriteLine("  devcontext                                    # Analyze current directory");
-            Console.WriteLine("  devcontext C:\\MyProject                       # Analyze specific directory");
-            Console.WriteLine("  devcontext -s -o context.md                  # Include signatures, save to file");
-            Console.WriteLine("  devcontext --include-signatures --verbose    # Detailed analysis with verbose output");
+            Console.WriteLine("  devcontext                   # Minimal analysis with token-saving (best for LLMs)");
+            Console.WriteLine("  devcontext -s -d -c          # Include signatures, dependencies, and call graph");
+            Console.WriteLine("  devcontext -o context.md     # Save to file");
+            Console.WriteLine("  devcontext --no-token-compact --verbose  # Detailed human-readable output");
+            Console.WriteLine("  devcontext -d --mermaid-graph  # Include dependency graph in Mermaid format");
             Console.WriteLine();
-            Console.WriteLine("OUTPUT:");
-            Console.WriteLine("  By default, outputs compact structure without method signatures to minimize");
-            Console.WriteLine("  token usage for LLM context. Use -s for detailed method signatures when needed.");
+            Console.WriteLine("NOTES:");
+            Console.WriteLine("  Token-compact mode is ON by default to optimize for LLM context windows.");
+            Console.WriteLine("  Use --no-token-compact for human-readable verbose output.");
         }
     }
 }
