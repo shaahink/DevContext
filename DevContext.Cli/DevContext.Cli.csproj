@@ -18,6 +18,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>devcontext</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
+    <LangVersion>preview</LangVersion>
 
 
   </PropertyGroup>

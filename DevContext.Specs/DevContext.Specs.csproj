@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <TargetFrameworks>net6.0;net472</TargetFrameworks>
-        <LangVersion>default</LangVersion>
+        <LangVersion>preview</LangVersion>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
         <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
         <IsPackable>false</IsPackable>

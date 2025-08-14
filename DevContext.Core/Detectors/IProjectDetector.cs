@@ -4,7 +4,8 @@ namespace DevContext.Core
 {
     public interface IProjectDetector
     {
-        bool Detect(string targetDir);
-        ExtractionResult Extract(string targetDir);
+        string Id { get; }
+        bool Detect(string directory);
+        Task<ExtractionResult> ExtractAsync(string directory);
     }
 }

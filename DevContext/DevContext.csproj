@@ -4,7 +4,7 @@
     <TargetFrameworks>netstandard2.0;netstandard2.1;net47;net8.0</TargetFrameworks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Nullable>enable</Nullable>
-    <LangVersion>default</LangVersion>
+    <LangVersion>preview</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <NoWarn>1591;1573</NoWarn>
     <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
@@ -31,8 +31,8 @@
 
   <ItemGroup Label="Package files">
     <None Include="..\PackageIcon.png" Pack="true" Visible="false" PackagePath="" />
-    <None Include="..\LICENSE" Pack="true" PackagePath=""/>
-    <None Include="..\PackageReadme.md" Pack="true" PackagePath="Readme.md"/>
+    <None Include="..\LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\PackageReadme.md" Pack="true" PackagePath="Readme.md" />
   </ItemGroup>
 
   <ItemGroup Label="Internals visible to">
