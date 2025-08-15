@@ -48,10 +48,10 @@ namespace DevContext.Cli
         public class Settings : CommandSettings
         {
             [CommandArgument(0, "[PATH]")]
-            public string Path { get; set; } = @"c:\code\github\dntsite";
+            public string Path { get; set; } = @"C:\Code\github\eShop";
 
             [CommandOption("-o|--output")]
-            public string? OutputFile { get; set; } = "new.md";
+            public string? OutputFile { get; set; } = "shop-context.md";
 
             [CommandOption("-c|--config")]
             public string? ConfigFile { get; set; }

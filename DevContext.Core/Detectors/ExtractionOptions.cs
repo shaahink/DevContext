@@ -12,8 +12,8 @@ namespace DevContext.Core
         public bool IncludeMethodSignatures { get; set; } = true;
         public bool IncludeDependencyGraph { get; set; } = true;
         public bool IncludeCallGraph { get; set; } = true;
-        public bool IncludeDomainModel { get; set; } = false;
-        public bool UseMermaidForGraphs { get; set; } = false;
+        public bool IncludeDomainModel { get; set; } = true;
+        public bool UseMermaidForGraphs { get; set; } = true;
         public bool TokenCompact { get; set; } = true;
         public string? OutputFilePath { get; set; } = null;
         public bool VerboseOutput { get; set; } = true;
@@ -58,12 +58,12 @@ namespace DevContext.Core
         };
 
         // Graph options
-        public int MaxCallGraphDepth { get; set; } = 3;
+        public int MaxCallGraphDepth { get; set; } = int.MaxValue;
         public int MinMethodComplexity { get; set; } = 2; // Cyclomatic complexity threshold
 
         // Output options
         public bool ShowElapsedTime { get; set; } = true;
-        public bool ShowMemoryUsage { get; set; } = false;
+        public bool ShowMemoryUsage { get; set; } = true;
         public OutputFormat OutputFormat { get; set; } = OutputFormat.Markdown;
     }
 
