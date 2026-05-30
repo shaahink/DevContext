@@ -1,4 +1,4 @@
-﻿namespace DevContext.Core.Extractors
+﻿namespace DevContext.Core
 {
     public class ExtractionResult
     {

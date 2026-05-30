@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using DevContext.Core;
 using DevContext.Core.Extractors;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
@@ -88,6 +89,9 @@ namespace DevContext.Core
                         Console.WriteLine($"Warning: Failed to load solution: {ex.Message}");
                 }
             }
+
+            // Apply depth + focus rules (new v1 behavior for better LLM prompt output)
+            ApplyDepthAndFocusRules();
 
             // Run extractors in parallel if enabled
             var extractorTasks = new List<Task<(string name, string content)>>();
@@ -256,6 +260,63 @@ namespace DevContext.Core
                 "Domain Model" => 6,
                 _ => 99
             };
+        }
+
+        /// <summary>
+        /// Applies the new Depth + Focus model to automatically adjust what gets extracted.
+        /// This is the core mechanism for producing output that is actually good to attach to LLM prompts.
+        /// </summary>
+        private void ApplyDepthAndFocusRules()
+        {
+            switch (_options.Depth)
+            {
+                case ExtractionDepth.Shallow:
+                    _options.IncludeCallGraph = false;
+                    _options.IncludeDomainModel = false;
+                    _options.IncludeMethodSignatures = false;
+                    _options.MaxCallGraphDepth = 0;
+                    // Still keep dependency graph + feature grouping — very valuable for architecture view
+                    break;
+
+                case ExtractionDepth.Deep:
+                    _options.IncludeCallGraph = true;
+                    _options.IncludeDomainModel = true;
+                    _options.MaxCallGraphDepth = Math.Max(_options.MaxCallGraphDepth, 5);
+                    break;
+
+                case ExtractionDepth.Balanced:
+                default:
+                    // Keep user-configured values, just ensure reasonable defaults
+                    if (_options.MaxCallGraphDepth == int.MaxValue)
+                        _options.MaxCallGraphDepth = 3;
+                    break;
+            }
+
+            // Focus-based adjustments (can be expanded significantly)
+            switch (_options.Focus)
+            {
+                case ExtractionFocus.Architecture:
+                    _options.EnableFeatureGrouping = true;
+                    _options.IncludeDependencyGraph = true;
+                    if (_options.Depth == ExtractionDepth.Shallow)
+                    {
+                        _options.IncludeCallGraph = false;
+                    }
+                    break;
+
+                case ExtractionFocus.Feature:
+                    _options.EnableFeatureGrouping = true;
+                    // When focusing on specific features, we may still want deeper call graphs inside them
+                    if (_options.Depth != ExtractionDepth.Shallow)
+                        _options.IncludeCallGraph = true;
+                    break;
+
+                case ExtractionFocus.Debug:
+                case ExtractionFocus.Implementation:
+                    _options.IncludeCallGraph = true;
+                    _options.IncludeDomainModel = true;
+                    break;
+            }
         }
 
         private void UpdateProgress(

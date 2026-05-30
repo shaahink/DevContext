@@ -11,6 +11,7 @@ using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis.MSBuild;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using System.ComponentModel;
 
 namespace DevContext.Cli
 {
@@ -73,6 +74,19 @@ namespace DevContext.Cli
 
             [CommandOption("--exclude")]
             public string[]? ExcludePatterns { get; set; }
+
+            // New depth + focus model (key for high-quality LLM prompt attachment)
+            [CommandOption("--depth")]
+            [Description("Extraction depth: shallow | balanced | deep")]
+            public string? Depth { get; set; }
+
+            [CommandOption("--focus")]
+            [Description("Focus mode: general | architecture | feature | implementation | debug")]
+            public string? Focus { get; set; }
+
+            [CommandOption("--feature")]
+            [Description("When --focus feature, specific feature/slice names to emphasize (repeatable)")]
+            public string[]? FocusedFeatures { get; set; }
         }
 
         public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -197,6 +211,24 @@ namespace DevContext.Cli
             if (settings.ExcludePatterns != null)
                 options.ExcludeDirectories.AddRange(settings.ExcludePatterns);
 
+            // === New Depth + Focus model wiring ===
+            if (!string.IsNullOrWhiteSpace(settings.Depth) &&
+                Enum.TryParse<ExtractionDepth>(settings.Depth, true, out var depth))
+            {
+                options.Depth = depth;
+            }
+
+            if (!string.IsNullOrWhiteSpace(settings.Focus) &&
+                Enum.TryParse<ExtractionFocus>(settings.Focus, true, out var focus))
+            {
+                options.Focus = focus;
+            }
+
+            if (settings.FocusedFeatures != null && settings.FocusedFeatures.Length > 0)
+            {
+                options.FocusedFeatures = settings.FocusedFeatures.ToList();
+            }
+
             return options;
         }
 
@@ -217,6 +249,9 @@ namespace DevContext.Cli
             table.AddRow("Include Domain Model", options.IncludeDomainModel ? "✓" : "✗");
             table.AddRow("Mermaid Graphs", options.UseMermaidForGraphs ? "✓" : "✗");
             table.AddRow("Max Call Depth", options.MaxCallGraphDepth.ToString());
+            table.AddRow("Depth", options.Depth.ToString());
+            table.AddRow("Focus", options.Focus.ToString() +
+                                  (options.FocusedFeatures.Any() ? $" ({string.Join(", ", options.FocusedFeatures)})" : ""));
             table.AddRow("Excluded Dirs", string.Join(", ", options.ExcludeDirectories.Take(3)) +
                                           (options.ExcludeDirectories.Count > 3 ? "..." : ""));
 
@@ -298,6 +333,36 @@ namespace DevContext.Cli
             options.IncludeDomainModel = extractors.Contains("Domain Model");
 
             options.UseMermaidForGraphs = AnsiConsole.Confirm("Use Mermaid for graphs?", false);
+
+            // New depth + focus questions (v1 emphasis)
+            var depthChoice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("Preferred extraction [bold]depth[/]?")
+                    .AddChoices("Shallow (architecture overview)", "Balanced (recommended)", "Deep (implementation/debug)"));
+
+            options.Depth = depthChoice.StartsWith("Shallow") ? ExtractionDepth.Shallow :
+                            depthChoice.StartsWith("Deep") ? ExtractionDepth.Deep : ExtractionDepth.Balanced;
+
+            var focusChoice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("Primary [bold]focus[/] for this extraction?")
+                    .AddChoices("General", "Architecture / Layers", "Specific Feature(s)", "Implementation", "Debugging"));
+
+            options.Focus = focusChoice switch
+            {
+                "Architecture / Layers" => ExtractionFocus.Architecture,
+                "Specific Feature(s)" => ExtractionFocus.Feature,
+                "Implementation" => ExtractionFocus.Implementation,
+                "Debugging" => ExtractionFocus.Debug,
+                _ => ExtractionFocus.General
+            };
+
+            if (options.Focus == ExtractionFocus.Feature)
+            {
+                var features = AnsiConsole.Ask<string>("Feature/slice names to focus on (comma separated):", "");
+                if (!string.IsNullOrWhiteSpace(features))
+                    options.FocusedFeatures = features.Split(',').Select(f => f.Trim()).ToList();
+            }
 
             options.MaxCallGraphDepth = AnsiConsole.Prompt(
                 new TextPrompt<int>("Maximum call graph depth:")

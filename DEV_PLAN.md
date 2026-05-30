@@ -3,9 +3,23 @@
 **Goal**: Turn the current half-baked state into a credible, CV-worthy, actually-usable CLI tool for extracting high-signal architectural and code context from .NET solutions (optimized for pasting into LLMs).
 
 **Base branch**: `better-cli` (currently the best foundation)
-**Recommended working branch**: `v1-polish` (create from better-cli)
+**Working branch**: `v1-polish` (created 2026-05-30 from better-cli)
+
+**Status**: User approved direction — polish the existing approach, focus heavily on output quality for real LLM usage (attach to prompts for better deliverables, debugging hints, architecture understanding). Priority on **depth control** and **smart software layer detection** with selective inclusion.
 
 **Realistic timeline for something you can be proud of on a CV**: 7–14 focused days (can be compressed or stretched).
+
+---
+
+## Current User Priorities (as of start of v1-polish)
+
+- Generated context must be **good enough to attach directly to a prompt** and produce noticeably better results (architecture discussions, feature implementation, debugging hints, onboarding).
+- **Depth control** — user should be able to ask for shallow (architecture overview) vs deep (implementation details for a specific area).
+- **Smart software layer detection** — reliably identify layers (Domain, Application, Infrastructure, Presentation/Web, Vertical Slices, etc.) and **decide intelligently what to include or summarize** based on the requested depth or focus.
+- Clean up noise in code and output.
+- Professional GitHub presence: excellent README + CI/CD.
+
+This shifts emphasis in Phase 2 toward "Layer-Aware + Intent-Aware Extraction" rather than just dumping more data.
 
 ---
 
@@ -58,14 +72,17 @@ You can still add a minimal "generic mode" (file tree + key file sampling + pack
 
 ## Phased Implementation Plan
 
-### Phase 0: Branch Hygiene & Baseline (½ day)
-- [ ] Create `v1-polish` from `better-cli`
+### Phase 0: Branch Hygiene & Baseline (½ day) — IN PROGRESS
+- [x] Create `v1-polish` from `better-cli` (2026-05-30)
 - [ ] Delete or clearly mark `failed-claude-attempt` and `z-ai` (they are pure template noise)
 - [ ] Decide fate of `refactor-to-better-cli` and `adding-generic-dotnet-extractor` (recommend: keep for history, or delete after merging any unique good ideas)
-- [ ] Run full build + manual smoke test of `extract`, `init`, `detect` on this repo + one other real .NET solution (e.g. eShop, CleanArchitecture template, etc.)
+- [ ] Set up `experiments/` folder + gitignore for safe iteration on real repos
+- [ ] Choose primary experimentation repository (strong recommendation: ardalis/CleanArchitecture for explicit layers)
+- [ ] Generate baseline outputs with current tool on chosen repo + this repo under different configurations (depth, focus, etc.)
+- [ ] Analyze outputs against the "attach to prompt" quality bar
 - [ ] Create `DEV_PLAN.md` (this file) and a `CHANGELOG.md` skeleton
 
-**Exit criteria**: Clean working branch, you can run the tool end-to-end.
+**Exit criteria**: Clean working branch + first set of experiment outputs + clear understanding of current output quality gaps vs the goal.
 
 ### Phase 1: Structural Cleanup & Architecture (2–3 days) — Highest CV impact per hour
 This phase alone will make the codebase look professional.

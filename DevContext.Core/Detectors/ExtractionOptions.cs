@@ -65,6 +65,15 @@ namespace DevContext.Core
         public bool ShowElapsedTime { get; set; } = true;
         public bool ShowMemoryUsage { get; set; } = true;
         public OutputFormat OutputFormat { get; set; } = OutputFormat.Markdown;
+
+        // === New v1: Depth + Layer/Focus Awareness (core to making output LLM-prompt-ready) ===
+        public ExtractionDepth Depth { get; set; } = ExtractionDepth.Balanced;
+        public ExtractionFocus Focus { get; set; } = ExtractionFocus.General;
+
+        /// <summary>
+        /// When Focus == Feature, these are the feature/slice names to emphasize.
+        /// </summary>
+        public List<string> FocusedFeatures { get; set; } = new();
     }
 
     public enum ArchitectureStyle
@@ -87,29 +96,45 @@ namespace DevContext.Core
         Html,
         PlainText
     }
-}
 
-
-namespace DevContext.Core
-{
-    public interface IProjectDetector
+    /// <summary>
+    /// Controls how much detail and noise is included in the extraction.
+    /// This is a key lever for making output useful when attached to LLM prompts.
+    /// </summary>
+    public enum ExtractionDepth
     {
-        string Id { get; }
-        bool Detect(string targetDir);
-        Task<ExtractionResult> ExtractAsync(string targetDir, IProgress<ExtractionProgress>? progress = null);
+        /// <summary>High-level architecture, layers, boundaries, key contracts. Minimal implementation detail.</summary>
+        Shallow,
+
+        /// <summary>Good balance for most "understand this codebase" use cases (default).</summary>
+        Balanced,
+
+        /// <summary>Maximum detail — deeper call graphs, more internals, less filtering. Use for deep implementation or debugging work.</summary>
+        Deep
     }
 
-    public class ExtractionProgress
+    /// <summary>
+    /// Expresses the user's intent for this extraction run.
+    /// Allows the tool to make smart decisions about what to emphasize or de-emphasize.
+    /// </summary>
+    public enum ExtractionFocus
     {
-        public string CurrentTask { get; set; } = "";
-        public string CurrentDetail { get; set; } = "";
-        public double PercentComplete { get; set; }
-        public TimeSpan ElapsedTime { get; set; }
-        public int CompletedTasks;
-        public int TotalTasks { get; set; }
+        /// <summary>General purpose — current broad behavior.</summary>
+        General,
+
+        /// <summary>Focus on architecture, layers, system boundaries and high-level design.</summary>
+        Architecture,
+
+        /// <summary>Focus on one or more specific features / vertical slices.</summary>
+        Feature,
+
+        /// <summary>Deep implementation details inside selected areas.</summary>
+        Implementation,
+
+        /// <summary>Debugging-oriented — richer call graphs and cross-layer flows.</summary>
+        Debug
     }
 }
-
 
 
 namespace DevContext.Core.Extractors
