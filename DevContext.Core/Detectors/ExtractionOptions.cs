@@ -183,7 +183,11 @@ namespace DevContext.Core.Extractors
                 if (compilation.ReferencedAssemblyNames.Any(a => a.Name.Contains("FastEndpoints")))
                     indicators[ArchitectureStyle.FastEndpoints] = indicators.GetValueOrDefault(ArchitectureStyle.FastEndpoints) + 10;
 
-                // Check for Minimal API patterns
+                bool hasMapGetPost = false;
+                bool hasControllers = false;
+                bool hasRazorPages = false;
+                bool hasFeaturesFolders = false;
+
                 foreach (var doc in project.Documents)
                 {
                     var tree = await doc.GetSyntaxTreeAsync();
@@ -194,31 +198,56 @@ namespace DevContext.Core.Extractors
                     var text = root.GetText().ToString();
 
                     if (text.Contains("app.MapGet") || text.Contains("app.MapPost"))
-                        indicators[ArchitectureStyle.MinimalApi] = indicators.GetValueOrDefault(ArchitectureStyle.MinimalApi) + 5;
+                        hasMapGetPost = true;
 
                     if (text.Contains(": Controller") || text.Contains(": ControllerBase"))
-                        indicators[ArchitectureStyle.MVC] = indicators.GetValueOrDefault(ArchitectureStyle.MVC) + 5;
+                        hasControllers = true;
 
                     if (text.Contains("@page") && text.Contains("PageModel"))
-                        indicators[ArchitectureStyle.RazorPages] = indicators.GetValueOrDefault(ArchitectureStyle.RazorPages) + 5;
+                        hasRazorPages = true;
+
+                    var path = doc.FilePath ?? "";
+                    if (path.Contains("/Features/") || path.Contains("\\Features\\") ||
+                        path.Contains("/Slices/") || path.Contains("\\Slices\\"))
+                        hasFeaturesFolders = true;
                 }
 
-                // Check folder structure for Clean Architecture
-                if (project.Name.EndsWith(".Domain") || project.Name.EndsWith(".Application") ||
-                    project.Name.EndsWith(".Infrastructure"))
-                    indicators[ArchitectureStyle.CleanArchitecture] = indicators.GetValueOrDefault(ArchitectureStyle.CleanArchitecture) + 8;
-
-                // Check for vertical slice patterns
-                var hasFeaturesFolders = project.Documents.Any(d =>
-                    d.FilePath?.Contains("/Features/") == true ||
-                    d.FilePath?.Contains("\\Features\\") == true);
+                if (hasMapGetPost)
+                    indicators[ArchitectureStyle.MinimalApi] = indicators.GetValueOrDefault(ArchitectureStyle.MinimalApi) + 6;
+                if (hasControllers)
+                    indicators[ArchitectureStyle.MVC] = indicators.GetValueOrDefault(ArchitectureStyle.MVC) + 6;
+                if (hasRazorPages)
+                    indicators[ArchitectureStyle.RazorPages] = indicators.GetValueOrDefault(ArchitectureStyle.RazorPages) + 5;
                 if (hasFeaturesFolders)
-                    indicators[ArchitectureStyle.VerticalSlice] = indicators.GetValueOrDefault(ArchitectureStyle.VerticalSlice) + 7;
+                    indicators[ArchitectureStyle.VerticalSlice] = indicators.GetValueOrDefault(ArchitectureStyle.VerticalSlice) + 8;
+
+                // Check folder structure / naming for Clean Architecture / Onion
+                var name = project.Name;
+                if (name.EndsWith(".Domain") || name.EndsWith(".Core") || name.Contains(".Domain"))
+                    indicators[ArchitectureStyle.CleanArchitecture] = indicators.GetValueOrDefault(ArchitectureStyle.CleanArchitecture) + 9;
+                if (name.EndsWith(".Application") || name.Contains(".Application"))
+                    indicators[ArchitectureStyle.CleanArchitecture] += 7;
+                if (name.EndsWith(".Infrastructure") || name.Contains(".Infrastructure"))
+                    indicators[ArchitectureStyle.CleanArchitecture] += 5;
+
+                // CLI / Console tool detection (important for tools like DevContext itself)
+                if (name.Contains("Cli") || name.Contains("Console") || name.Contains("Tool"))
+                    indicators[ArchitectureStyle.Unknown] = indicators.GetValueOrDefault(ArchitectureStyle.Unknown) + 2;
             }
 
-            return indicators.Any()
-                ? indicators.OrderByDescending(kvp => kvp.Value).First().Key
-                : ArchitectureStyle.Unknown;
+            if (indicators.Any())
+            {
+                // Prefer CleanArchitecture or VerticalSlice over MinimalApi when signals are close
+                var top = indicators.OrderByDescending(kvp => kvp.Value).First();
+                if (top.Key == ArchitectureStyle.MinimalApi && indicators.ContainsKey(ArchitectureStyle.CleanArchitecture))
+                    return ArchitectureStyle.CleanArchitecture;
+                if (top.Key == ArchitectureStyle.MinimalApi && indicators.ContainsKey(ArchitectureStyle.VerticalSlice))
+                    return ArchitectureStyle.VerticalSlice;
+
+                return top.Key;
+            }
+
+            return ArchitectureStyle.Unknown;
         }
 
         private async Task<Dictionary<string, FeatureInfo>> GroupByFastEndpointsAsync(Solution solution)

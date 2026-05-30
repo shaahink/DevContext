@@ -11,6 +11,9 @@ using System.Xml.Linq;
 using DevContext.Core;
 using DevContext.Core.Extractors;
 using Microsoft.Build.Locator;
+
+// Note: Some extractor classes are still defined in this file during incremental refactoring.
+// They will be moved to DevContext.Core.Extractors in follow-up passes.
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -111,6 +114,15 @@ namespace DevContext.Core
                     var featureDetector = new FeatureDetector(_options);
                     var features = await featureDetector.DetectFeaturesAsync(solution);
                     return FormatFeatureGrouping(features);
+                }, progress, extractionProgress));
+            }
+
+            // New: Software Layer Summary for architecture focus (high value for LLM prompts)
+            if (_options.Focus == ExtractionFocus.Architecture || _options.Depth == ExtractionDepth.Shallow)
+            {
+                extractorTasks.Add(RunExtractorAsync("Software Layers", async () =>
+                {
+                    return GenerateLayerSummary(directory, solution);
                 }, progress, extractionProgress));
             }
 
@@ -268,6 +280,7 @@ namespace DevContext.Core
         /// </summary>
         private void ApplyDepthAndFocusRules()
         {
+            // === Depth rules (stronger for v1) ===
             switch (_options.Depth)
             {
                 case ExtractionDepth.Shallow:
@@ -275,24 +288,26 @@ namespace DevContext.Core
                     _options.IncludeDomainModel = false;
                     _options.IncludeMethodSignatures = false;
                     _options.MaxCallGraphDepth = 0;
-                    // Still keep dependency graph + feature grouping — very valuable for architecture view
+                    // Keep high-value architecture signals
+                    _options.EnableFeatureGrouping = true;
+                    _options.IncludeDependencyGraph = true;
                     break;
 
                 case ExtractionDepth.Deep:
                     _options.IncludeCallGraph = true;
                     _options.IncludeDomainModel = true;
-                    _options.MaxCallGraphDepth = Math.Max(_options.MaxCallGraphDepth, 5);
+                    _options.IncludeMethodSignatures = true;
+                    _options.MaxCallGraphDepth = Math.Max(_options.MaxCallGraphDepth, 6);
                     break;
 
                 case ExtractionDepth.Balanced:
                 default:
-                    // Keep user-configured values, just ensure reasonable defaults
                     if (_options.MaxCallGraphDepth == int.MaxValue)
                         _options.MaxCallGraphDepth = 3;
                     break;
             }
 
-            // Focus-based adjustments (can be expanded significantly)
+            // === Focus rules ===
             switch (_options.Focus)
             {
                 case ExtractionFocus.Architecture:
@@ -301,12 +316,12 @@ namespace DevContext.Core
                     if (_options.Depth == ExtractionDepth.Shallow)
                     {
                         _options.IncludeCallGraph = false;
+                        _options.IncludeMethodSignatures = false;
                     }
                     break;
 
                 case ExtractionFocus.Feature:
                     _options.EnableFeatureGrouping = true;
-                    // When focusing on specific features, we may still want deeper call graphs inside them
                     if (_options.Depth != ExtractionDepth.Shallow)
                         _options.IncludeCallGraph = true;
                     break;
@@ -315,7 +330,14 @@ namespace DevContext.Core
                 case ExtractionFocus.Implementation:
                     _options.IncludeCallGraph = true;
                     _options.IncludeDomainModel = true;
+                    _options.IncludeMethodSignatures = true;
                     break;
+            }
+
+            // When user explicitly focuses on features, reduce global noise
+            if (_options.Focus == ExtractionFocus.Feature && _options.FocusedFeatures.Any())
+            {
+                // In future we will filter extractors more aggressively to selected features
             }
         }
 
@@ -379,6 +401,81 @@ namespace DevContext.Core
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Generates a high-level software layer summary. Very useful when attaching context to LLM prompts
+        /// for architecture discussions.
+        /// </summary>
+        private string GenerateLayerSummary(string directory, Solution? solution)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Software Layers");
+
+            var layerGroups = new Dictionary<string, List<string>>();
+
+            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
+                .ToList();
+
+            foreach (var file in csFiles)
+            {
+                var relative = Path.GetRelativePath(directory, file);
+                var layer = ClassifyLayer(relative, file);
+
+                if (!layerGroups.ContainsKey(layer))
+                    layerGroups[layer] = new List<string>();
+
+                var fileName = Path.GetFileName(file);
+                if (layerGroups[layer].Count < 8)
+                    layerGroups[layer].Add(fileName);
+            }
+
+            foreach (var (layer, files) in layerGroups.OrderBy(k => GetLayerOrder(k.Key)))
+            {
+                sb.AppendLine($"## {layer}");
+                sb.AppendLine($"Files: {string.Join(", ", files)}" + (files.Count >= 8 ? " ..." : ""));
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        private string ClassifyLayer(string relativePath, string fullPath)
+        {
+            var lower = relativePath.ToLowerInvariant();
+
+            if (lower.Contains("/domain/") || lower.Contains("\\domain\\") || lower.Contains(".domain"))
+                return "Domain";
+            if (lower.Contains("/application/") || lower.Contains("\\application\\") || lower.Contains(".application"))
+                return "Application";
+            if (lower.Contains("/infrastructure/") || lower.Contains("\\infrastructure\\") || lower.Contains(".infrastructure"))
+                return "Infrastructure";
+            if (lower.Contains("/web/") || lower.Contains("\\web\\") || lower.Contains("/api/") || lower.Contains("/controllers/"))
+                return "Presentation / API";
+            if (lower.Contains("/features/") || lower.Contains("\\features\\") || lower.Contains("/slices/"))
+                return "Vertical Slices / Features";
+            if (lower.Contains("/cli/") || lower.Contains("\\cli\\") || lower.Contains("program.cs"))
+                return "Entry Point / CLI";
+            if (lower.Contains("/build/") || lower.Contains("/tests/") || lower.Contains("/specs/"))
+                return "Build / Tests";
+
+            return "Core / Shared";
+        }
+
+        private int GetLayerOrder(string layer)
+        {
+            return layer switch
+            {
+                "Domain" => 1,
+                "Application" => 2,
+                "Infrastructure" => 3,
+                "Presentation / API" => 4,
+                "Vertical Slices / Features" => 5,
+                "Entry Point / CLI" => 10,
+                "Build / Tests" => 20,
+                _ => 99
+            };
         }
     }
 

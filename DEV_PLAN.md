@@ -5,7 +5,9 @@
 **Base branch**: `better-cli` (currently the best foundation)
 **Working branch**: `v1-polish` (created 2026-05-30 from better-cli)
 
-**Status**: User approved direction — polish the existing approach, focus heavily on output quality for real LLM usage (attach to prompts for better deliverables, debugging hints, architecture understanding). Priority on **depth control** and **smart software layer detection** with selective inclusion.
+**Status**: Active execution on `v1-polish`.
+- User requested: more targeted baselines on current repo (no external cloning), start structural cleanup, and design/implement depth + layer awareness in parallel.
+- Significant progress made in one session across all three tracks (see commit history on v1-polish).
 
 **Realistic timeline for something you can be proud of on a CV**: 7–14 focused days (can be compressed or stretched).
 
