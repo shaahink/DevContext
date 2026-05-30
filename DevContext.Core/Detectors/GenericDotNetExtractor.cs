@@ -405,36 +405,64 @@ namespace DevContext.Core
 
         /// <summary>
         /// Generates a high-level software layer summary. Very useful when attaching context to LLM prompts
-        /// for architecture discussions.
+        /// for architecture discussions. Now project-aware for much better signal on real solutions.
         /// </summary>
         private string GenerateLayerSummary(string directory, Solution? solution)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Software Layers");
 
-            var layerGroups = new Dictionary<string, List<string>>();
+            // Project-aware layer classification (much higher value)
+            var projectLayers = new Dictionary<string, Dictionary<string, int>>();
 
-            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
-                .ToList();
-
-            foreach (var file in csFiles)
+            if (solution != null)
             {
-                var relative = Path.GetRelativePath(directory, file);
-                var layer = ClassifyLayer(relative, file);
+                foreach (var project in solution.Projects)
+                {
+                    var projName = project.Name;
+                    projectLayers[projName] = new Dictionary<string, int>();
 
-                if (!layerGroups.ContainsKey(layer))
-                    layerGroups[layer] = new List<string>();
+                    foreach (var doc in project.Documents)
+                    {
+                        if (string.IsNullOrEmpty(doc.FilePath)) continue;
+                        if (_options.ExcludeDirectories.Any(ex => doc.FilePath.Contains(ex))) continue;
 
-                var fileName = Path.GetFileName(file);
-                if (layerGroups[layer].Count < 8)
-                    layerGroups[layer].Add(fileName);
+                        var relative = Path.GetRelativePath(directory, doc.FilePath);
+                        var layer = ClassifyLayer(relative, doc.FilePath);
+
+                        if (!projectLayers[projName].ContainsKey(layer))
+                            projectLayers[projName][layer] = 0;
+                        projectLayers[projName][layer]++;
+                    }
+                }
+            }
+            else
+            {
+                // Fallback to file walk
+                var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+                    .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
+                    .ToList();
+
+                projectLayers["Solution"] = new Dictionary<string, int>();
+                foreach (var file in csFiles)
+                {
+                    var relative = Path.GetRelativePath(directory, file);
+                    var layer = ClassifyLayer(relative, file);
+                    if (!projectLayers["Solution"].ContainsKey(layer))
+                        projectLayers["Solution"][layer] = 0;
+                    projectLayers["Solution"][layer]++;
+                }
             }
 
-            foreach (var (layer, files) in layerGroups.OrderBy(k => GetLayerOrder(k.Key)))
+            foreach (var (project, layers) in projectLayers.OrderBy(p => p.Key))
             {
-                sb.AppendLine($"## {layer}");
-                sb.AppendLine($"Files: {string.Join(", ", files)}" + (files.Count >= 8 ? " ..." : ""));
+                if (layers.Count == 0) continue;
+
+                sb.AppendLine($"## {project}");
+                foreach (var (layer, count) in layers.OrderBy(l => GetLayerOrder(l.Key)))
+                {
+                    sb.AppendLine($"- **{layer}**: {count} files");
+                }
                 sb.AppendLine();
             }
 
@@ -622,164 +650,6 @@ namespace DevContext.Core
         private string SanitizeForMermaid(string name)
         {
             return name.Replace(".", "_").Replace("-", "_");
-        }
-    }
-
-    public class CallGraphExtractor
-    {
-        private readonly ExtractionOptions _options;
-
-        public CallGraphExtractor(ExtractionOptions options)
-        {
-            _options = options;
-        }
-
-        public async Task<string> ExtractAsync(Solution solution)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("# Call Graph");
-
-            var calls = new ConcurrentBag<(string caller, string callee, string feature)>();
-
-            // Process projects in parallel
-            var tasks = solution.Projects.Select(async project =>
-            {
-                var compilation = await project.GetCompilationAsync();
-                if (compilation == null)
-                    return;
-
-                // Process documents in parallel within each project
-                var docTasks = project.Documents.Select(async doc =>
-                {
-                    var tree = await doc.GetSyntaxTreeAsync();
-                    if (tree == null)
-                        return;
-
-                    var root = await tree.GetRootAsync();
-                    var model = compilation.GetSemanticModel(tree);
-
-                    // Find all method declarations
-                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-                        .Where(m => !IsTrivialMethod(m));
-
-                    foreach (var method in methods)
-                    {
-                        var methodSymbol = model.GetDeclaredSymbol(method);
-                        if (methodSymbol == null || ShouldExcludeMethod(methodSymbol))
-                            continue;
-
-                        var callerName = GetFullMethodName(methodSymbol);
-                        var feature = ExtractFeatureFromNamespace(methodSymbol.ContainingNamespace?.ToString() ?? "");
-
-                        // Find all invocations within this method
-                        var invocations = method.DescendantNodes().OfType<InvocationExpressionSyntax>();
-
-                        foreach (var invocation in invocations)
-                        {
-                            var invokedSymbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-                            if (invokedSymbol == null || ShouldExcludeMethod(invokedSymbol))
-                                continue;
-
-                            // Filter to only track internal calls (within solution)
-                            if (invokedSymbol.ContainingAssembly.Name == compilation.AssemblyName ||
-                                solution.Projects.Any(p => p.AssemblyName == invokedSymbol.ContainingAssembly.Name))
-                            {
-                                var calleeName = GetFullMethodName(invokedSymbol);
-                                calls.Add((callerName, calleeName, feature));
-                            }
-                        }
-                    }
-                });
-
-                await Task.WhenAll(docTasks);
-            });
-
-            await Task.WhenAll(tasks);
-
-            // Group by feature if enabled
-            if (_options.EnableFeatureGrouping)
-            {
-                var callsByFeature = calls.GroupBy(c => c.feature)
-                    .OrderBy(g => g.Key);
-
-                foreach (var featureGroup in callsByFeature)
-                {
-                    sb.AppendLine($"## {featureGroup.Key}");
-
-                    var featureCalls = featureGroup
-                        .GroupBy(c => c.caller)
-                        .OrderBy(g => g.Key);
-
-                    foreach (var group in featureCalls)
-                    {
-                        var callees = string.Join(", ", group.Select(c => GetShortName(c.callee)).Distinct());
-                        sb.AppendLine($"{GetShortName(group.Key)} -> {callees}");
-                    }
-                    sb.AppendLine();
-                }
-            }
-            else
-            {
-                // Regular grouping
-                var groupedCalls = calls.GroupBy(c => c.caller)
-                    .OrderBy(g => g.Key);
-
-                foreach (var group in groupedCalls)
-                {
-                    var callees = string.Join(", ", group.Select(c => GetShortName(c.callee)).Distinct());
-                    sb.AppendLine($"{GetShortName(group.Key)} -> {callees}");
-                }
-            }
-
-            sb.AppendLine();
-            return sb.ToString();
-        }
-
-        private bool IsTrivialMethod(MethodDeclarationSyntax method)
-        {
-            var name = method.Identifier.Text;
-            return _options.TrivialMethodPatterns.Any(pattern =>
-                Regex.IsMatch(name, pattern.Replace("*", ".*")));
-        }
-
-        private bool ShouldExcludeMethod(IMethodSymbol method)
-        {
-            var ns = method.ContainingNamespace?.ToString() ?? "";
-            return _options.ExcludeNamespaces.Any(pattern =>
-                pattern.Contains("*")
-                    ? Regex.IsMatch(ns, pattern.Replace("*", ".*"))
-                    : ns.Contains(pattern));
-        }
-
-        private string ExtractFeatureFromNamespace(string ns)
-        {
-            // Try to extract feature from namespace pattern
-            foreach (var pattern in _options.FeaturePatterns)
-            {
-                var regex = new Regex(pattern.Replace("*", @"(\w+)"));
-                var match = regex.Match(ns);
-                if (match.Success && match.Groups.Count > 1)
-                {
-                    return match.Groups[1].Value;
-                }
-            }
-
-            // Fallback to second-level namespace
-            var parts = ns.Split('.');
-            return parts.Length >= 2 ? parts[1] : "Core";
-        }
-
-        private string GetFullMethodName(IMethodSymbol method)
-        {
-            return $"{method.ContainingType?.ToDisplayString()}.{method.Name}";
-        }
-
-        private string GetShortName(string fullName)
-        {
-            var parts = fullName.Split('.');
-            if (parts.Length >= 2)
-                return $"{parts[^2]}.{parts[^1]}";
-            return fullName;
         }
     }
 
