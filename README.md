@@ -82,7 +82,61 @@ For advanced control you can still use `--depth` and `--focus` explicitly, but f
 
 ## Usage Scenarios
 
-We have tested DevContext on real projects (including [DntSite](https://github.com/VahidN/DntSite) and [CleanArchitecture](https://github.com/ardalis/CleanArchitecture)) with the exact scenarios developers face. Here is the current state:
+We have tested DevContext extensively on real projects including:
+- [DntSite](https://github.com/VahidN/DntSite) (large feature-sliced production-ish Blazor app)
+- [CleanArchitecture](https://github.com/ardalis/CleanArchitecture) reference implementation + samples
+- [ContosoUniversity](https://github.com/jbogard/ContosoUniversity) (classic small ASP.NET + EF)
+
+Here is an honest assessment against the scenarios you actually care about:
+
+### Scenario: Understand how a method (or service) works + related code
+
+**Recommended usage:**
+```bash
+devcontext "Explain how the CurrentUserService works and what it depends on, including authentication" \
+  --around "src/DntSite.Web/Features/UserProfiles/Services/CurrentUserService.cs"
+```
+
+**What you get today (from real runs):**
+- Very tight scoping when you point `--around` at the specific `.cs` file.
+- Relevant services, entities, mappers, and configuration in that bounded context.
+- Dependency graph showing what touches this area.
+- Good enough for an LLM to give a solid explanation of responsibilities and data flow.
+
+**Current gaps:**
+- Shallow mode gives structure + files more than deep "this calls this under condition X" sequences.
+- Call graph can still be noisy for complex flows.
+
+### Scenario: Debug why something is throwing or behaving wrongly
+
+**Recommended usage:**
+```bash
+devcontext "Debug why a guest might not see comments on a post even though data exists" \
+  --around "src/DntSite.Web/Features/Comments"
+```
+
+**What you get today:**
+- Strong focus on the relevant feature when using `--around`.
+- The task description helps the tool lean toward more detailed extraction.
+- You get the services, data access, and related components needed to investigate.
+
+**Current gaps:**
+- Call graph quality is the weakest area for true root cause debugging today.
+
+### Scenario: Develop / implement a new feature Y
+
+**Recommended usage:**
+```bash
+devcontext "Add support for multiple contact methods (email, phone, social) per contributor" \
+  --around "src/Clean.Architecture.Core"
+```
+
+**What you get today (this is currently the strongest scenario):**
+- Excellent at surfacing existing patterns in the target bounded context.
+- Layer summary + dependency graph help you place the new code correctly.
+- Relevant entities, services, endpoints, and mappers.
+
+This scenario benefits the most from the `--task` + `--around` approach.
 
 ### 1. Understand how a method / service works + related code
 
