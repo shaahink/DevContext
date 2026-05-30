@@ -28,9 +28,10 @@ namespace DevContext.Cli
 
                 config.AddCommand<ExtractCommand>("extract")
                     .WithAlias("e")
-                    .WithDescription("Extract context from a .NET project or solution")
-                    .WithExample(new[] { "extract", ".", "-o", "context.md" })
-                    .WithExample(new[] { "extract", "C:\\MyProject", "--config", "devcontext.json" });
+                    .WithDescription("Extract focused context for a task (recommended: use --task + --around)")
+                    .WithExample(new[] { "extract", ".", "--task", "\"add payment feature\"", "--around", "src/Payments" })
+                    .WithExample(new[] { "extract", "src/Orders", "--task", "\"I need to understand the order checkout flow\"" })
+                    .WithExample(new[] { "extract", ".", "--task", "\"architecture review\"" });
 
                 config.AddCommand<InitCommand>("init")
                     .WithDescription("Initialize a configuration file")
@@ -93,6 +94,10 @@ namespace DevContext.Cli
             [CommandOption("--task")]
             [Description("Describe what you're trying to do (e.g. 'add Iranian payment support' or 'debug comment flow'). Tool will choose smart depth/focus.")]
             public string? TaskDescription { get; set; }
+
+            [CommandOption("--around")]
+            [Description("Entry point folder or file(s) you're working in. Strongly influences what context is extracted (makes output much more targeted and cheaper).")]
+            public string[]? AroundPaths { get; set; }
         }
 
         protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
@@ -235,6 +240,11 @@ namespace DevContext.Cli
                 options.FocusedFeatures = settings.FocusedFeatures.ToList();
             }
 
+            if (settings.AroundPaths != null && settings.AroundPaths.Length > 0)
+            {
+                options.FocusedPaths = settings.AroundPaths.ToList();
+            }
+
             // Very early intent inference from --task (cheap way to reduce param overload)
             if (!string.IsNullOrWhiteSpace(settings.TaskDescription))
             {
@@ -280,6 +290,10 @@ namespace DevContext.Cli
             table.AddRow("Depth", options.Depth.ToString());
             table.AddRow("Focus", options.Focus.ToString() +
                                   (options.FocusedFeatures.Any() ? $" ({string.Join(", ", options.FocusedFeatures)})" : ""));
+            if (options.FocusedPaths.Any())
+            {
+                table.AddRow("Around / Entry", string.Join(", ", options.FocusedPaths.Take(2)) + (options.FocusedPaths.Count > 2 ? "..." : ""));
+            }
             table.AddRow("Excluded Dirs", string.Join(", ", options.ExcludeDirectories.Take(3)) +
                                           (options.ExcludeDirectories.Count > 3 ? "..." : ""));
 

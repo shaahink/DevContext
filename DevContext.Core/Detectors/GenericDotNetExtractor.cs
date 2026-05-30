@@ -271,8 +271,26 @@ namespace DevContext.Core
                 "Call Graph" => 4,
                 "Code Structure" => 5,
                 "Domain Model" => 6,
+                "Software Layers" => 7,
                 _ => 99
             };
+        }
+
+        /// <summary>
+        /// Cheap scoping helper. When user gave --around / FocusedPaths, we try to stay near them.
+        /// This is one of the main levers for making context extraction much cheaper than full agent indexing.
+        /// </summary>
+        private bool ShouldIncludeForFocusedPaths(string relativePath)
+        {
+            if (!_options.FocusedPaths.Any()) return true;
+
+            var normalized = relativePath.Replace('\\', '/').ToLowerInvariant();
+
+            return _options.FocusedPaths.Any(p =>
+            {
+                var fp = p.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
+                return normalized.Contains(fp) || fp.Contains(normalized);
+            });
         }
 
         /// <summary>
@@ -339,6 +357,16 @@ namespace DevContext.Core
             if (_options.Focus == ExtractionFocus.Feature && _options.FocusedFeatures.Any())
             {
                 // In future we will filter extractors more aggressively to selected features
+            }
+
+            // Strong bias when user provided --around paths (core to cheap, task-focused context)
+            if (_options.FocusedPaths.Any())
+            {
+                if (_options.Focus == ExtractionFocus.General)
+                {
+                    _options.Focus = ExtractionFocus.Feature;
+                }
+                // We don't have direct access to the original task text here, so we rely on the CLI having already set Depth/Focus appropriately.
             }
         }
 
@@ -429,6 +457,19 @@ namespace DevContext.Core
                         if (_options.ExcludeDirectories.Any(ex => doc.FilePath.Contains(ex))) continue;
 
                         var relative = Path.GetRelativePath(directory, doc.FilePath);
+
+                        // When --around / FocusedPaths are given, only count layers near those paths
+                        if (_options.FocusedPaths.Any())
+                        {
+                            var norm = relative.Replace('\\', '/').ToLowerInvariant();
+                            bool near = _options.FocusedPaths.Any(p =>
+                            {
+                                var fp = p.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
+                                return norm == fp || norm.StartsWith(fp + "/") || norm.StartsWith(fp + "\\");
+                            });
+                            if (!near) continue;
+                        }
+
                         var layer = ClassifyLayer(relative, doc.FilePath);
 
                         if (!projectLayers[projName].ContainsKey(layer))
@@ -519,257 +560,6 @@ namespace DevContext.Core
                 "Build / Tests" => 20,
                 _ => 99
             };
-        }
-    }
-
-    public class DependencyGraphExtractor
-    {
-        private readonly ExtractionOptions _options;
-
-        public DependencyGraphExtractor(ExtractionOptions options)
-        {
-            _options = options;
-        }
-
-        public async Task<string> ExtractAsync(string directory, Solution? solution)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("# Dependency Graph");
-
-            var projectDeps = new ConcurrentDictionary<string, List<string>>();
-            var projectPackages = new ConcurrentDictionary<string, List<string>>();
-
-            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
-                .ToList();
-
-            var tasks = csprojFiles.Select(async csproj =>
-            {
-                try
-                {
-                    using var stream = File.OpenRead(csproj);
-                    var doc = await XDocument.LoadAsync(stream, LoadOptions.None, CancellationToken.None);
-                    var projectName = Path.GetFileNameWithoutExtension(csproj);
-
-                    var deps = new List<string>();
-                    var packages = new List<string>();
-
-                    // Project references
-                    foreach (var projRef in doc.Descendants("ProjectReference"))
-                    {
-                        var refPath = projRef.Attribute("Include")?.Value;
-                        if (!string.IsNullOrEmpty(refPath))
-                        {
-                            var refName = Path.GetFileNameWithoutExtension(refPath);
-                            deps.Add(refName);
-                        }
-                    }
-
-                    // NuGet packages - filter out noise
-                    foreach (var pkg in doc.Descendants("PackageReference"))
-                    {
-                        var name = pkg.Attribute("Include")?.Value;
-                        var ver = pkg.Attribute("Version")?.Value;
-                        if (!string.IsNullOrEmpty(name) && !IsNoisePackage(name))
-                        {
-                            packages.Add($"{name}@{ver ?? "latest"}");
-                        }
-                    }
-
-                    projectDeps[projectName] = deps;
-                    projectPackages[projectName] = packages;
-                }
-                catch (Exception ex)
-                {
-                    if (_options.VerboseOutput)
-                        Console.WriteLine($"Warning: Error reading {csproj}: {ex.Message}");
-                }
-            });
-
-            await Task.WhenAll(tasks);
-
-            if (_options.UseMermaidForGraphs)
-            {
-                // Mermaid format
-                sb.AppendLine("```mermaid");
-                sb.AppendLine("graph LR");
-                foreach (var kvp in projectDeps.Where(p => p.Value.Any()))
-                {
-                    foreach (var dep in kvp.Value)
-                    {
-                        sb.AppendLine($"  {SanitizeForMermaid(kvp.Key)} --> {SanitizeForMermaid(dep)}");
-                    }
-                }
-                sb.AppendLine("```");
-            }
-            else
-            {
-                // Plain text format
-                sb.AppendLine("## Project Dependencies");
-                foreach (var kvp in projectDeps.OrderBy(p => p.Key))
-                {
-                    if (kvp.Value.Any())
-                    {
-                        sb.AppendLine($"{kvp.Key} -> {string.Join(", ", kvp.Value)}");
-                    }
-                }
-
-                // Top NuGet packages (filtered)
-                var allPackages = projectPackages.SelectMany(p => p.Value)
-                    .GroupBy(p => p.Split('@')[0])
-                    .Where(g => g.Count() > 1) // Only show packages used by multiple projects
-                    .OrderByDescending(g => g.Count())
-                    .Take(int.MaxValue); // Limit to top 10
-
-                if (allPackages.Any())
-                {
-                    sb.AppendLine("\n## Top Shared NuGet Packages");
-                    foreach (var pkg in allPackages)
-                    {
-                        sb.AppendLine($"- {pkg.Key} (used by {pkg.Count()} projects)");
-                    }
-                }
-            }
-
-            sb.AppendLine();
-            return sb.ToString();
-        }
-
-        private bool IsNoisePackage(string packageName)
-        {
-            var noisePatterns = new[]
-            {
-                "Microsoft.NET.Test.Sdk",
-                "xunit",
-                "coverlet",
-                "Microsoft.SourceLink",
-                "Microsoft.CodeAnalysis.Analyzers",
-                "StyleCop",
-                "SonarAnalyzer"
-            };
-
-            return noisePatterns.Any(pattern => packageName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private string SanitizeForMermaid(string name)
-        {
-            return name.Replace(".", "_").Replace("-", "_");
-        }
-    }
-
-    public class CodeStructureExtractor
-    {
-        private readonly ExtractionOptions _options;
-
-        public CodeStructureExtractor(ExtractionOptions options)
-        {
-            _options = options;
-        }
-
-        public async Task<string> ExtractAsync(string directory, Solution? solution)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("# Code Structure");
-
-            // File structure
-            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
-                .Select(f => Path.GetRelativePath(directory, f))
-                .OrderBy(f => f)
-                .ToList();
-
-            sb.AppendLine($"**Total Files**: {csFiles.Count} .cs");
-
-            // Group by directory with limit
-            var filesByDirectory = csFiles.GroupBy(f => Path.GetDirectoryName(f) ?? "")
-                .OrderBy(g => g.Key)
-                .Take(int.MaxValue); // Limit directories shown
-
-            foreach (var group in filesByDirectory)
-            {
-                var dirName = string.IsNullOrEmpty(group.Key) ? "Root" : group.Key;
-                var files = group.Take(5).Select(Path.GetFileName).ToList();
-                var fileList = string.Join(", ", files);
-
-                if (group.Count() > 5)
-                    fileList += $" ... (+{group.Count() - 5} more)";
-
-                sb.AppendLine($"**{dirName}**: {fileList}");
-            }
-
-            // Method signatures if requested
-            if (_options.IncludeMethodSignatures)
-            {
-                sb.AppendLine("\n## Key Method Signatures");
-                await ExtractMethodSignaturesAsync(sb, directory);
-            }
-
-            sb.AppendLine();
-            return sb.ToString();
-        }
-
-        private async Task ExtractMethodSignaturesAsync(StringBuilder sb, string directory)
-        {
-            var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
-                .Take(int.MaxValue); // Limit files analyzed
-
-            var tasks = csFiles.Select(async file =>
-            {
-                try
-                {
-                    var code = await File.ReadAllTextAsync(file);
-                    var tree = CSharpSyntaxTree.ParseText(code);
-                    var root = await tree.GetRootAsync();
-                    var relativePath = Path.GetRelativePath(directory, file);
-
-                    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-                        .Where(m => m.Modifiers.Any(mod => mod.Text == "public") &&
-                                   !IsTrivialMethod(m.Identifier.Text))
-                        .Take(int.MaxValue); // Limit methods per file
-
-                    if (!methods.Any())
-                        return (string.Empty, new List<string>());
-
-
-                    var signatures = new List<string>();
-                    foreach (var method in methods)
-                    {
-                        var modifiers = string.Join(" ", method.Modifiers.Select(m => m.ValueText));
-                        var parameters = _options.TokenCompact
-                            ? string.Join(",", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))
-                            : string.Join(", ", method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}"));
-
-                        signatures.Add($"- {modifiers} {method.ReturnType} {method.Identifier}({parameters})");
-                    }
-
-                    return (relativePath, signatures);
-                }
-                catch
-                {
-                    return (string.Empty, new List<string>());
-
-                }
-            });
-
-            var results = await Task.WhenAll(tasks);
-
-            foreach (var result in results.Where(r => r.Item2.Any()))
-            {
-                sb.AppendLine($"\n### {result.Item1}");
-                foreach (var sig in result.Item2)
-                {
-                    sb.AppendLine(sig);
-                }
-            }
-        }
-
-
-
-        private bool IsTrivialMethod(string methodName)
-        {
-            return _options.TrivialMethodPatterns.Any(pattern =>
-                Regex.IsMatch(methodName, pattern.Replace("*", ".*")));
         }
     }
 

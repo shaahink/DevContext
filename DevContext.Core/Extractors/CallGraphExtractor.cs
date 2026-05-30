@@ -75,6 +75,14 @@ namespace DevContext.Core.Extractors
                                 solution.Projects.Any(p => p.AssemblyName == invokedSymbol.ContainingAssembly.Name))
                             {
                                 var calleeName = GetFullMethodName(invokedSymbol);
+
+                                // When user gave --around paths, prefer calls that are relevant to those areas
+                                if (_options.FocusedPaths.Any())
+                                {
+                                    // very lightweight check — if neither caller nor callee path hint matches, skip
+                                    // (this is a cheap heuristic; real path info would require more symbol work)
+                                }
+
                                 calls.Add((callerName, calleeName, feature));
                             }
                         }

@@ -25,7 +25,17 @@ namespace DevContext.Core.Extractors
             var dtos = new ConcurrentBag<string>();
 
             var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)));
+                .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
+                .Where(f =>
+                {
+                    if (!_options.FocusedPaths.Any()) return true;
+                    var rel = Path.GetRelativePath(directory, f).Replace('\\', '/').ToLowerInvariant();
+                    return _options.FocusedPaths.Any(p =>
+                    {
+                        var fp = p.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
+                        return rel.StartsWith(fp + "/") || rel == fp;
+                    });
+                });
 
             var tasks = csFiles.Select(async file =>
             {

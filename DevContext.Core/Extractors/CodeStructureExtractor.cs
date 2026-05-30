@@ -21,14 +21,20 @@ namespace DevContext.Core.Extractors
             var sb = new StringBuilder();
             sb.AppendLine("# Code Structure");
 
-            // File structure
+            // File structure - respect FocusedPaths when provided (key for cheap, targeted context)
             var csFiles = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
                 .Where(f => !_options.ExcludeDirectories.Any(ep => f.Contains(ep)))
                 .Select(f => Path.GetRelativePath(directory, f))
+                .Where(f => IsNearFocusedPath(f, directory))
                 .OrderBy(f => f)
                 .ToList();
 
             sb.AppendLine($"**Total Files**: {csFiles.Count} .cs");
+
+            if (_options.FocusedPaths.Any())
+            {
+                sb.AppendLine("_Showing only files near the provided entry point(s) for targeted context._");
+            }
 
             // Group by directory with limit
             var filesByDirectory = csFiles.GroupBy(f => Path.GetDirectoryName(f) ?? "")
@@ -116,6 +122,22 @@ namespace DevContext.Core.Extractors
         {
             return _options.TrivialMethodPatterns.Any(pattern =>
                 Regex.IsMatch(methodName, pattern.Replace("*", ".*")));
+        }
+
+        private bool IsNearFocusedPath(string relativePath, string root)
+        {
+            if (!_options.FocusedPaths.Any()) return true;
+
+            var normalized = relativePath.Replace('\\', '/').ToLowerInvariant();
+
+            return _options.FocusedPaths.Any(p =>
+            {
+                var fp = p.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
+                // Strict "under the path" check — this is what makes --around actually produce targeted cheap context
+                return normalized == fp ||
+                       normalized.StartsWith(fp + "/") ||
+                       normalized.StartsWith(fp + "\\");
+            });
         }
     }
 }

@@ -74,6 +74,12 @@ namespace DevContext.Core
         /// When Focus == Feature, these are the feature/slice names to emphasize.
         /// </summary>
         public List<string> FocusedFeatures { get; set; } = new();
+
+        /// <summary>
+        /// User-provided entry points or "around" paths. Used to bound and prioritize extraction
+        /// (key for cheap, task-oriented context instead of full solution dumps).
+        /// </summary>
+        public List<string> FocusedPaths { get; set; } = new();
     }
 
     public enum ArchitectureStyle
