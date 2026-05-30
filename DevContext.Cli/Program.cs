@@ -88,6 +88,11 @@ namespace DevContext.Cli
             [CommandOption("--feature")]
             [Description("When --focus feature, specific feature/slice names to emphasize (repeatable)")]
             public string[]? FocusedFeatures { get; set; }
+
+            // Simpler task-oriented UX (work in progress toward agent-like cheap context)
+            [CommandOption("--task")]
+            [Description("Describe what you're trying to do (e.g. 'add Iranian payment support' or 'debug comment flow'). Tool will choose smart depth/focus.")]
+            public string? TaskDescription { get; set; }
         }
 
         protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
@@ -228,6 +233,28 @@ namespace DevContext.Cli
             if (settings.FocusedFeatures != null && settings.FocusedFeatures.Length > 0)
             {
                 options.FocusedFeatures = settings.FocusedFeatures.ToList();
+            }
+
+            // Very early intent inference from --task (cheap way to reduce param overload)
+            if (!string.IsNullOrWhiteSpace(settings.TaskDescription))
+            {
+                var task = settings.TaskDescription.ToLowerInvariant();
+
+                if (task.Contains("architecture") || task.Contains("overview") || task.Contains("structure") || task.Contains("layers"))
+                {
+                    options.Depth = ExtractionDepth.Shallow;
+                    options.Focus = ExtractionFocus.Architecture;
+                }
+                else if (task.Contains("add") || task.Contains("implement") || task.Contains("feature") || task.Contains("new"))
+                {
+                    options.Depth = ExtractionDepth.Balanced;
+                    options.Focus = ExtractionFocus.Feature;
+                }
+                else if (task.Contains("debug") || task.Contains("fix") || task.Contains("why") || task.Contains("issue"))
+                {
+                    options.Depth = ExtractionDepth.Deep;
+                    options.Focus = ExtractionFocus.Debug;
+                }
             }
 
             return options;
