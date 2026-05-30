@@ -192,3 +192,12 @@ Tests/Benchmarks/BenchmarkDotNet.Artifacts/
 
 # Documentation spell check
 node_modules/
+
+# DevContext experimentation outputs and cloned test repos (large, regenerated often)
+# We keep only documentation and templates in git
+experiments/*
+!experiments/.gitkeep
+!experiments/README.md
+!experiments/BASELINE_ANALYSIS_TEMPLATE.md
+!experiments/outputs/
+experiments/outputs/*
