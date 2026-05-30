@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using DevContext.Core;
 using DevContext.Core.Extractors;
@@ -89,7 +90,7 @@ namespace DevContext.Cli
             public string[]? FocusedFeatures { get; set; }
         }
 
-        public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+        protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
         {
             var targetDir = Path.GetFullPath(settings.Path);
 
@@ -291,7 +292,7 @@ namespace DevContext.Cli
             public bool Force { get; set; }
         }
 
-        public override int Execute(CommandContext context, Settings settings)
+        protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
         {
             const string configFile = "devcontext.json";
 
@@ -334,26 +335,31 @@ namespace DevContext.Cli
 
             options.UseMermaidForGraphs = AnsiConsole.Confirm("Use Mermaid for graphs?", false);
 
-            // New depth + focus questions (v1 emphasis)
+            // New depth + focus questions (v1 emphasis - critical for good LLM prompt results)
+            AnsiConsole.MarkupLine("[grey]Depth controls how much detail vs overview you get. Focus tells the tool what you care about most.[/]");
+
             var depthChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("Preferred extraction [bold]depth[/]?")
-                    .AddChoices("Shallow (architecture overview)", "Balanced (recommended)", "Deep (implementation/debug)"));
+                    .Title("Preferred extraction [bold]depth[/] (affects noise level and size)?")
+                    .AddChoices(
+                        "Shallow (fast, high-level architecture + layers only - great for prompts)",
+                        "Balanced (recommended for most use cases)",
+                        "Deep (maximum detail for implementation/debugging)"));
 
             options.Depth = depthChoice.StartsWith("Shallow") ? ExtractionDepth.Shallow :
                             depthChoice.StartsWith("Deep") ? ExtractionDepth.Deep : ExtractionDepth.Balanced;
 
             var focusChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("Primary [bold]focus[/] for this extraction?")
-                    .AddChoices("General", "Architecture / Layers", "Specific Feature(s)", "Implementation", "Debugging"));
+                    .Title("Primary [bold]focus[/] for this extraction (helps smart filtering)?")
+                    .AddChoices("General (everything)", "Architecture / Layers", "Specific Feature(s) / Vertical Slice", "Implementation details", "Debugging / Call flows"));
 
             options.Focus = focusChoice switch
             {
                 "Architecture / Layers" => ExtractionFocus.Architecture,
-                "Specific Feature(s)" => ExtractionFocus.Feature,
-                "Implementation" => ExtractionFocus.Implementation,
-                "Debugging" => ExtractionFocus.Debug,
+                "Specific Feature(s) / Vertical Slice" => ExtractionFocus.Feature,
+                "Implementation details" => ExtractionFocus.Implementation,
+                "Debugging / Call flows" => ExtractionFocus.Debug,
                 _ => ExtractionFocus.General
             };
 
@@ -440,7 +446,7 @@ namespace DevContext.Cli
             public string Path { get; set; } = ".";
         }
 
-        public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+        protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
         {
             var targetDir = Path.GetFullPath(settings.Path);
 

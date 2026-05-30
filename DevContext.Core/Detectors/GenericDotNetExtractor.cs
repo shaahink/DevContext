@@ -444,20 +444,31 @@ namespace DevContext.Core
         private string ClassifyLayer(string relativePath, string fullPath)
         {
             var lower = relativePath.ToLowerInvariant();
+            var fileName = Path.GetFileName(fullPath).ToLowerInvariant();
 
+            // Strong project/folder signals first (best for real solutions)
             if (lower.Contains("/domain/") || lower.Contains("\\domain\\") || lower.Contains(".domain"))
                 return "Domain";
             if (lower.Contains("/application/") || lower.Contains("\\application\\") || lower.Contains(".application"))
                 return "Application";
             if (lower.Contains("/infrastructure/") || lower.Contains("\\infrastructure\\") || lower.Contains(".infrastructure"))
                 return "Infrastructure";
-            if (lower.Contains("/web/") || lower.Contains("\\web\\") || lower.Contains("/api/") || lower.Contains("/controllers/"))
+            if (lower.Contains("/web/") || lower.Contains("\\web\\") || lower.Contains("/api/") || lower.Contains("/controllers/") || lower.Contains("/endpoints/"))
                 return "Presentation / API";
-            if (lower.Contains("/features/") || lower.Contains("\\features\\") || lower.Contains("/slices/"))
+            if (lower.Contains("/features/") || lower.Contains("\\features\\") || lower.Contains("/slices/") || lower.Contains("/modules/"))
                 return "Vertical Slices / Features";
-            if (lower.Contains("/cli/") || lower.Contains("\\cli\\") || lower.Contains("program.cs"))
+
+            // File-level heuristics
+            if (fileName.Contains("controller") || fileName.Contains("endpoint") || fileName.Contains("minimalapi"))
+                return "Presentation / API";
+            if (fileName.EndsWith("entity.cs") || fileName.EndsWith("aggregate.cs") || fileName.EndsWith("valueobject.cs"))
+                return "Domain";
+            if (fileName.Contains("handler") || fileName.Contains("command") || fileName.Contains("query") || fileName.Contains("usecase"))
+                return "Application";
+
+            if (lower.Contains("/cli/") || lower.Contains("\\cli\\") || fileName == "program.cs")
                 return "Entry Point / CLI";
-            if (lower.Contains("/build/") || lower.Contains("/tests/") || lower.Contains("/specs/"))
+            if (lower.Contains("/build/") || lower.Contains("/tests/") || lower.Contains("/specs/") || lower.Contains(".tests"))
                 return "Build / Tests";
 
             return "Core / Shared";
@@ -476,112 +487,6 @@ namespace DevContext.Core
                 "Build / Tests" => 20,
                 _ => 99
             };
-        }
-    }
-
-    // Updated extractors to be async
-    public class SolutionOverviewExtractor
-    {
-        private readonly ExtractionOptions _options;
-
-        public SolutionOverviewExtractor(ExtractionOptions options)
-        {
-            _options = options;
-        }
-
-        public async Task<string> ExtractAsync(string directory, Solution? solution)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("# Solution Overview");
-            sb.AppendLine($"**Root**: {directory}");
-
-            // Solution info
-            var slnFiles = Directory.EnumerateFiles(directory, "*.sln", SearchOption.TopDirectoryOnly).ToList();
-            if (slnFiles.Any())
-            {
-                sb.AppendLine($"**Solution**: {Path.GetFileName(slnFiles.First())}");
-                if (solution != null)
-                    sb.AppendLine($"**Projects**: {solution.Projects.Count()}");
-            }
-
-            // Parallel project analysis
-            var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories)
-                .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
-                .ToList();
-
-            sb.AppendLine($"**Total .csproj**: {csprojFiles.Count}");
-
-            var frameworks = new ConcurrentBag<string>();
-            var runtimeIdentifiers = new ConcurrentBag<string>();
-            var analyzers = new ConcurrentBag<string>();
-            var isCliTool = false;
-            var cliCommandName = string.Empty;
-
-            var tasks = csprojFiles.Select(async csproj =>
-            {
-                try
-                {
-                    using var stream = File.OpenRead(csproj);
-                    var doc = await XDocument.LoadAsync(stream, LoadOptions.None, CancellationToken.None);
-
-                    // Target frameworks
-                    var tf = doc.Descendants("TargetFramework").FirstOrDefault()?.Value ??
-                             doc.Descendants("TargetFrameworks").FirstOrDefault()?.Value?.Split(';').FirstOrDefault();
-                    if (!string.IsNullOrEmpty(tf))
-                        frameworks.Add(tf);
-
-                    // Runtime identifiers
-                    var rid = doc.Descendants("RuntimeIdentifier").FirstOrDefault()?.Value;
-                    if (!string.IsNullOrEmpty(rid))
-                        runtimeIdentifiers.Add(rid);
-
-                    var rids = doc.Descendants("RuntimeIdentifiers").FirstOrDefault()?.Value;
-                    if (!string.IsNullOrEmpty(rids))
-                    {
-                        foreach (var r in rids.Split(';'))
-                            runtimeIdentifiers.Add(r.Trim());
-                    }
-
-                    // Analyzers
-                    foreach (var analyzer in doc.Descendants("PackageReference")
-                        .Where(p => p.Attribute("Include")?.Value.Contains("Analyzer") == true))
-                    {
-                        analyzers.Add(analyzer.Attribute("Include")?.Value ?? "");
-                    }
-
-                    // CLI tool detection
-                    var outputType = doc.Descendants("OutputType").FirstOrDefault()?.Value;
-                    var toolCommand = doc.Descendants("ToolCommandName").FirstOrDefault()?.Value;
-                    var packageType = doc.Descendants("PackAsTool").FirstOrDefault()?.Value;
-
-                    if ((outputType?.Equals("Exe", StringComparison.OrdinalIgnoreCase) == true && toolCommand != null) ||
-                        packageType?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
-                    {
-                        isCliTool = true;
-                        cliCommandName = toolCommand ?? Path.GetFileNameWithoutExtension(csproj);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (_options.VerboseOutput)
-                        Console.WriteLine($"Warning: Error reading {csproj}: {ex.Message}");
-                }
-            });
-
-            await Task.WhenAll(tasks);
-
-            sb.AppendLine($"**Frameworks**: {string.Join(", ", frameworks.Distinct())}");
-
-            if (runtimeIdentifiers.Any())
-                sb.AppendLine($"**Runtime IDs**: {string.Join(", ", runtimeIdentifiers.Distinct())}");
-
-            if (analyzers.Any())
-                sb.AppendLine($"**Analyzers**: {string.Join(", ", analyzers.Distinct())}");
-
-            sb.AppendLine($"**Type**: {(isCliTool ? $"CLI Tool (cmd: {cliCommandName})" : "Library/App")}");
-            sb.AppendLine();
-
-            return sb.ToString();
         }
     }
 
