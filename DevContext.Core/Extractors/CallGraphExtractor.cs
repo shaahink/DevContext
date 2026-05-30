@@ -20,6 +20,15 @@ namespace DevContext.Core.Extractors
             var sb = new StringBuilder();
             sb.AppendLine("# Call Graph");
 
+            // In shallow or pure architecture mode, we intentionally produce very little here
+            // (the orchestrator already disables the extractor in many shallow cases).
+            if (_options.Depth == ExtractionDepth.Shallow || _options.Focus == ExtractionFocus.Architecture)
+            {
+                sb.AppendLine("_Call graph omitted for this profile (shallow/architecture focus)._");
+                sb.AppendLine();
+                return sb.ToString();
+            }
+
             var calls = new ConcurrentBag<(string caller, string callee, string feature)>();
 
             // Process projects in parallel
