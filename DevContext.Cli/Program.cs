@@ -90,13 +90,12 @@ namespace DevContext.Cli
             [Description("When --focus feature, specific feature/slice names to emphasize (repeatable)")]
             public string[]? FocusedFeatures { get; set; }
 
-            // Simpler task-oriented UX (work in progress toward agent-like cheap context)
-            [CommandOption("--task")]
-            [Description("Describe what you're trying to do (e.g. 'add Iranian payment support' or 'debug comment flow'). Tool will choose smart depth/focus.")]
-            public string? TaskDescription { get; set; }
+            [CommandOption("--for")]
+            [Description("Optional description of what you're trying to do. Helps the tool choose better defaults (e.g. 'add payment support', 'debug comment visibility').")]
+            public string? For { get; set; }
 
             [CommandOption("--around")]
-            [Description("Entry point folder or file(s) you're working in. Strongly influences what context is extracted (makes output much more targeted and cheaper).")]
+            [Description("Entry point (file or folder). The tool extracts relevant context starting from here. This is the main way to use the tool.")]
             public string[]? AroundPaths { get; set; }
         }
 
@@ -245,25 +244,43 @@ namespace DevContext.Cli
                 options.FocusedPaths = settings.AroundPaths.ToList();
             }
 
-            // Very early intent inference from --task (cheap way to reduce param overload)
-            if (!string.IsNullOrWhiteSpace(settings.TaskDescription))
-            {
-                var task = settings.TaskDescription.ToLowerInvariant();
+            bool hasEntryPoint = options.FocusedPaths.Any();
 
-                if (task.Contains("architecture") || task.Contains("overview") || task.Contains("structure") || task.Contains("layers"))
+            // Auto-behaviour: --for is fully optional
+            if (!string.IsNullOrWhiteSpace(settings.For))
+            {
+                var intent = settings.For.ToLowerInvariant();
+
+                if (intent.Contains("architecture") || intent.Contains("overview") || intent.Contains("structure") || intent.Contains("layers"))
                 {
                     options.Depth = ExtractionDepth.Shallow;
                     options.Focus = ExtractionFocus.Architecture;
                 }
-                else if (task.Contains("add") || task.Contains("implement") || task.Contains("feature") || task.Contains("new"))
+                else if (intent.Contains("add") || intent.Contains("implement") || intent.Contains("feature") || intent.Contains("new"))
                 {
+                    options.Depth = ExtractionDepth.Balanced;
+                    options.Focus = hasEntryPoint ? ExtractionFocus.Feature : ExtractionFocus.General;
+                }
+                else if (intent.Contains("debug") || intent.Contains("fix") || intent.Contains("why") || intent.Contains("issue"))
+                {
+                    options.Depth = ExtractionDepth.Balanced;
+                    options.Focus = ExtractionFocus.Debug;
+                }
+            }
+            else
+            {
+                // No --for provided → smart defaults
+                if (hasEntryPoint)
+                {
+                    // User gave a clear entry point → focus on that area
                     options.Depth = ExtractionDepth.Balanced;
                     options.Focus = ExtractionFocus.Feature;
                 }
-                else if (task.Contains("debug") || task.Contains("fix") || task.Contains("why") || task.Contains("issue"))
+                else
                 {
-                    options.Depth = ExtractionDepth.Deep;
-                    options.Focus = ExtractionFocus.Debug;
+                    // No specific entry → high-level architecture / structure summary
+                    options.Depth = ExtractionDepth.Shallow;
+                    options.Focus = ExtractionFocus.Architecture;
                 }
             }
 
