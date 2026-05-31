@@ -5,6 +5,7 @@ on:
   push:
       branches:
         - 'main'
+        - 'v1-polish'   # Active development branch for DevContext v1
       tags:
         - '*'
   pull_request:
@@ -56,6 +57,10 @@ jobs:
         path: |
           ./Artifacts/*
           ./TestResults/*.trx
+
+    # TODO: Add "Tool Validation" step once the CLI is more stable.
+    # Example: build the CLI then run it against CleanArchitecture or DntSite sample
+    # with standard --task profiles to guard context quality/scoping.
 
   publish-test-results:
     name: "Publish Tests Results"

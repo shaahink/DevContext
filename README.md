@@ -103,20 +103,35 @@ devcontext "Explain how the CurrentUserService works and what it depends on, inc
 - Dependency graph showing what touches this area.
 - Good enough for an LLM to give a solid explanation of responsibilities and data flow.
 
-**Current gaps:**
-- Shallow mode gives structure + files more than deep "this calls this under condition X" sequences.
-- Call graph can still be noisy for complex flows.
+**Current gaps (from actual generated outputs):**
+- Shallow mode gives excellent file scoping and structure, but limited deep call sequences and invariants.
+- Call graph quality is still the weakest area for rich "this calls this under condition X" explanations.
 
 ### Scenario: Debug why something is throwing or behaving wrongly
 
 **Recommended usage:**
 ```bash
-devcontext "Debug why a guest might not see comments on a post even though data exists" \
+devcontext "Debug why a guest might not see comments on a post even though the data exists" \
   --around "src/DntSite.Web/Features/Comments"
 ```
 
-**What you get today:**
-- Strong focus on the relevant feature when using `--around`.
+**What you get today (from real DntSite runs):**
+- Strong focus on the relevant feature area.
+- The task description helps bias toward more detailed extraction.
+- You get the services, data access, and related components needed to investigate.
+
+**Current gaps:**
+- Call graph is still too noisy for precise root-cause debugging. Best used as a high-quality "here are the most relevant pieces" starter pack for the LLM.
+
+### Architecture Detection
+
+Current detection (project naming + folder structure + syntax/package signals) is **directionally useful**:
+
+- On DntSite (real feature-sliced app) it correctly surfaces strong "Vertical Slices / Features" dominance.
+- On ContosoUniversity (classic small ASP.NET + EF) it picks up feature folders and infrastructure well.
+- On CleanArchitecture reference it shows layered relationships in the dependency graph reasonably.
+
+The explicit top-level "Architecture Style" label is still heuristic and can be weak. The practical value today comes more from the scoped layer summary + dependency graph than from the single label. We are actively improving this based on real repo testing.
 - The task description helps the tool lean toward more detailed extraction.
 - You get the services, data access, and related components needed to investigate.
 
