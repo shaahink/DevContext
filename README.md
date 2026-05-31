@@ -27,12 +27,12 @@
 
 <a href="#about">About</a> •
 <a href="#how-to-use-it">How To Use</a> •
+<a href="#examples">Examples</a> •
 <a href="#download">Download</a> •
 <a href="#building">Building</a> •
 <a href="#contributing">Contributing</a> •
 <a href="#versioning">Versioning</a> •
 <a href="#credits">Credits</a> •
-<a href="#related">Related</a> •
 <a href="#license">License</a>
 
 </div>
@@ -77,6 +77,8 @@ devcontext . --task "architecture review of the user profile system" --around sr
 The `--task` description helps the tool choose smart defaults for depth and focus. `--around` (or `--entry`) strongly scopes what gets extracted, keeping output relevant and relatively cheap.
 
 See the [Usage Scenarios](#usage-scenarios) section below with real examples from actual .NET projects.
+
+Curated real outputs are also available in the [`examples/`](./examples) folder.
 
 For advanced control you can still use `--depth` and `--focus` explicitly, but for most day-to-day work `--task` + `--around` is the recommended approach.
 

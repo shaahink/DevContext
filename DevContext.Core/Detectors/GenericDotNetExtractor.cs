@@ -11,9 +11,6 @@ using System.Xml.Linq;
 using DevContext.Core;
 using DevContext.Core.Extractors;
 using Microsoft.Build.Locator;
-
-// Note: Some extractor classes are still defined in this file during incremental refactoring.
-// They will be moved to DevContext.Core.Extractors in follow-up passes.
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -21,6 +18,10 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace DevContext.Core
 {
+    /// <summary>
+    /// Main orchestrator for .NET solution context extraction.
+    /// Most heavy lifting has been extracted into individual *Extractor classes.
+    /// </summary>
     public class GenericDotNetProjectDetector : IProjectDetector
     {
         private readonly ExtractionOptions _options;

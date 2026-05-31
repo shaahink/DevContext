@@ -27,8 +27,8 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: |
-          3.0.x
-          6.0.x
+          8.0.x
+          9.0.x
 
     - name: Run NUKE
       run: ./build.ps1
@@ -82,4 +82,28 @@ jobs:
       with:
         comment_mode: always
         files: "artifacts/**/**/*.trx"
-  
+
+  # Basic smoke test for the CLI tool itself (proves it builds and runs)
+  tool-validation:
+    name: "CLI Tool Smoke Test"
+    runs-on: windows-latest
+    needs: [build]
+    if: always()
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET 9 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Build CLI
+      run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release --no-restore
+
+    - name: Smoke test - basic extraction on current solution
+      run: |
+        dotnet run --project DevContext.Cli -- extract . --task "architecture overview" --around "DevContext.Core" -o smoke-context.md --no-progress
+        if (!(Test-Path smoke-context.md)) { exit 1 }
+        Write-Host "Tool produced output successfully"
+

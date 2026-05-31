@@ -133,7 +133,14 @@ namespace DevContext.Core.Extractors
             return _options.FocusedPaths.Any(p =>
             {
                 var fp = p.Replace('\\', '/').ToLowerInvariant().TrimEnd('/');
-                // Strict "under the path" check — this is what makes --around actually produce targeted cheap context
+
+                // If user pointed at a specific file (e.g. a method's file), be extremely tight
+                if (fp.EndsWith(".cs"))
+                {
+                    return normalized == fp;
+                }
+
+                // Strict "under the path" check for folders
                 return normalized == fp ||
                        normalized.StartsWith(fp + "/") ||
                        normalized.StartsWith(fp + "\\");
