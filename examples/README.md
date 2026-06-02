@@ -1,36 +1,27 @@
-# DevContext — Real Usage Examples
+# Examples
 
-These are actual outputs from the current pipeline on real .NET projects using the `--task` + `--around` pattern.
+Real outputs from DevContext on real .NET projects. Each example was generated with a specific command — the output is included verbatim.
 
-## 01 — Add Reputation Feature (self-analysis)
+## 01 — Feature-focused extraction (self-analysis)
 
-**Command:**
 ```bash
 devcontext extract . --task "add a new feature for user reputation points and badges" --around "DevContext.Core"
 ```
 
-Shows how the tool scopes context when given a clear feature intent: call graph, layer summary, project dependencies.
+Shows how the tool scopes context around a specific project with call graph, layer summary, and dependency graph.
 
-## 02 — Architecture Overview (CleanArchitecture)
-
-**Command:**
-```bash
-devcontext extract . --depth shallow --focus architecture --around "src/Clean.Architecture.Web/Contributors"
-```
-
-Demonstrates shallow extraction focused on architecture boundaries — ideal for LLM prompts about high-level design.
-
-## How to generate your own
+## 02 — Architecture overview (CleanArchitecture)
 
 ```bash
-# Feature-focused extraction
-devcontext extract . --task "your task description" --around path/to/relevant/code
-
-# Architecture overview (cheapest, highest-level)
-devcontext extract . --depth shallow --focus architecture --around src/YourProject
-
-# Deep debugging context
-devcontext extract . --depth deep --focus debug --around src/YourProject
+devcontext extract ".test-repos/CleanArchitecture" --depth balanced --focus feature --around "src/Web/Endpoints/Contributors"
 ```
 
-The more specific the `--task` + `--around` combination, the more useful the output.
+13-project Clean Architecture template with correct layer breakdown and dependency enforcement.
+
+## Generating your own
+
+```bash
+devcontext extract . --task "your task" --around path/to/code
+devcontext extract . --depth shallow --focus architecture
+devcontext extract . --depth deep --focus debug --around src/Target
+```

@@ -1,15 +1,8 @@
-# DevContext — Example 02: Architecture Overview of CleanArchitecture
+# Example 02: Architecture overview of CleanArchitecture
 
-> **Command:** `devcontext extract ".test-repos/CleanArchitecture" --depth balanced --focus feature --around "src/Web/Endpoints/Contributors"`  
-> **Date:** 2026-06-02  
-> **Profile:** Depth=Balanced, Focus=Feature
+**Command:** `devcontext extract ".test-repos/CleanArchitecture" --depth balanced --focus feature --around "src/Web/Endpoints/Contributors"`
 
-This output was generated against the `jasontaylordev/CleanArchitecture` template (the canonical .NET Clean Architecture reference). Notice:
-
-- **13 projects** correctly detected, all on `net10.0` (including the `Directory.Build.props` fallback).
-- **Layer breakdown** matches the architecture perfectly: Domain → Application → Infrastructure → Presentation.
-- **Dependency graph** enforces Clean Architecture rules: Web depends on Application + Infrastructure, Application depends on Domain, etc.
-- At **1,580 characters**, this is cheap enough to attach to any LLM prompt.
+Output against the `jasontaylordev/CleanArchitecture` template. 13 projects detected on net10.0, layer breakdown matching Domain → Application → Infrastructure → Presentation, dependency graph at 1,580 characters.
 
 ---
 

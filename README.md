@@ -1,6 +1,6 @@
 # DevContext
 
-A CLI tool that extracts relevant context from .NET projects for use with LLMs.
+A CLI tool that extracts focused context from .NET projects for LLM prompts. Uses Roslyn static analysis to understand call graphs, dependencies, and architecture layers — then prunes output based on your entry point and task description.
 
 ## Install
 
@@ -8,35 +8,46 @@ A CLI tool that extracts relevant context from .NET projects for use with LLMs.
 dotnet tool install --global DevContext.Cli
 ```
 
-## How it works
-
-Point it at an entry point (a file or folder). It extracts the code that is structurally connected to it — mainly through the call graph and related types.
-
-By default it tries to stay focused on what is directly relevant from your entry point.
-
-## Basic usage
+## Usage
 
 ```bash
 # Point at an entry point (file or folder)
-devcontext --around src/MyApp/Features/Orders
+devcontext extract --around src/MyApp/Features/Orders
 
-# With optional description of what you're doing (helps tuning)
-devcontext --around src/MyApp/Features/Orders --for "understand checkout flow"
+# With a task description (helps tune depth/focus automatically)
+devcontext extract --task "understand checkout flow" --around src/MyApp/Features/Orders
+
+# Architecture overview (cheapest mode)
+devcontext extract --depth shallow --focus architecture
+
+# Deep debugging context
+devcontext extract --depth deep --focus debug --around src/MyApp/Services
 ```
 
-When no specific entry point is given, it defaults to a high-level architecture / structure summary of the solution.
+When no entry point is given, defaults to a high-level architecture summary.
 
 ## Examples
 
-See the [`examples/`](./examples) folder for real outputs.
+See [`examples/`](./examples) for real outputs against CleanArchitecture and this repo.
 
-## Building
+## Profiles
+
+| Depth | Focus | Use case |
+|---|---|---|
+| `shallow` | `architecture` | High-level layer/dependency overview |
+| `balanced` | `feature` | Feature work with implementation context |
+| `deep` | `debug` | Full call graphs and cross-layer flows |
+
+Intent inference: `--task` text like "add", "implement", "debug", "architecture" auto-selects depth and focus.
+
+## Build
 
 ```bash
 ./build.ps1
+dotnet test DevContext.Core.Tests --filter "FullyQualifiedName~Integration"
 ```
 
-Requires the .NET 8 or 9 SDK.
+Requires .NET 9 SDK.
 
 ## License
 

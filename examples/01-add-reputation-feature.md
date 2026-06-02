@@ -1,16 +1,8 @@
-# DevContext — Example 01: Feature-Focused Extraction
+# Example 01: Feature-focused extraction
 
-> **Command:** `devcontext extract . --task "add a new feature for user reputation points and badges" --around "DevContext.Core"`  
-> **Date:** 2026-06-02  
-> **Profile:** Depth=Balanced, Focus=Feature
+**Command:** `devcontext extract . --task "add a new feature for user reputation points and badges" --around "DevContext.Core"`
 
-This is a real output from DevContext analyzing its own codebase. Notice how:
-
-- The **Solution Overview** lists only the relevant 7 projects (no noise from `.test-repos/` or `bin/obj/`).
-- **Software Layers** clearly shows the ClI entry point split from the Core library.
-- **Dependency Graph** captures all project-to-project references.
-- **Call Graph** groups method calls by namespace segment ("Cli", "Core", "General") — the caller tells you where in the codebase each call lives.
-- The output is **readable markdown** — no mangled `pub`/`priv` abbreviations.
+Extraction against the DevContext repo itself. Output includes 7 projects, layer breakdown, dependency graph, and call graph grouped by namespace.
 
 ---
 

@@ -57,10 +57,6 @@ jobs:
           ./Artifacts/*
           ./TestResults/*.trx
 
-    # TODO: Add "Tool Validation" step once the CLI is more stable.
-    # Example: build the CLI then run it against CleanArchitecture or DntSite sample
-    # with standard --task profiles to guard context quality/scoping.
-
   publish-test-results:
     name: "Publish Tests Results"
     needs: [ build ]
@@ -82,8 +78,6 @@ jobs:
         comment_mode: always
         files: "artifacts/**/**/*.trx"
 
-  # Integration tests: run the pipeline against shallow-cloned real-world .NET repos.
-  # These guard against regressions in the core analysis pipeline (projects, layers, call graph).
   integration-tests:
     name: "Integration Tests"
     runs-on: windows-latest
@@ -110,10 +104,8 @@ jobs:
         name: integration-test-results
         path: TestResults/*.trx
 
-  # Smoke test that the CLI tool builds and can actually run basic extractions.
-  # This protects the core value of the project (producing usable context).
   tool-validation:
-    name: "CLI Tool Smoke Test"
+    name: "CLI Smoke Test"
     runs-on: windows-latest
     needs: [build]
 
@@ -125,24 +117,11 @@ jobs:
       with:
         dotnet-version: 9.0.x
 
-    - name: Restore & Build CLI
+    - name: Build CLI
       run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release
 
-    - name: Run smoke extraction on current solution
-      run: |
-        dotnet run --project DevContext.Cli -- extract . --task "quick architecture overview" --around "DevContext.Core" --no-progress -o smoke-test-context.md
-        if (-not (Test-Path smoke-test-context.md)) {
-          Write-Error "Smoke test failed: no output file produced"
-          exit 1
-        }
-        Write-Host "Smoke test passed. Output size: $((Get-Item smoke-test-context.md).Length) bytes"
-
-    - name: Build CLI
-      run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release --no-restore
-
-    - name: Smoke test - basic extraction on current solution
+    - name: Run smoke extraction
       run: |
         dotnet run --project DevContext.Cli -- extract . --task "architecture overview" --around "DevContext.Core" -o smoke-context.md --no-progress
         if (!(Test-Path smoke-context.md)) { exit 1 }
-        Write-Host "Tool produced output successfully"
-
+        Write-Host "Smoke test passed. Output size: $((Get-Item smoke-context.md).Length) bytes"
