@@ -17,11 +17,6 @@ public sealed class MarkdownRenderer
         RenderFeatures(sb, model);
         RenderProjects(sb, model);
 
-        if (options.ShowElapsedTime)
-        {
-            sb.AppendLine($"\n---\n**Total Time**: {options.ShowElapsedTime}");
-        }
-
         return sb.ToString();
     }
 
@@ -138,6 +133,15 @@ public sealed class MarkdownRenderer
     private static void RenderProjects(StringBuilder sb, CodeModel model)
     {
         sb.AppendLine("# Code Structure");
+
+        var hasTypes = model.Projects.Any(p => p.Types.Count > 0);
+
+        if (!hasTypes)
+        {
+            sb.AppendLine("_Deep type analysis available with `--depth deep` and a loadable Roslyn workspace._");
+            sb.AppendLine();
+            return;
+        }
 
         foreach (var project in model.Projects)
         {

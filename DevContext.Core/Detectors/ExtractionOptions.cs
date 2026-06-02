@@ -26,7 +26,8 @@ namespace DevContext.Core
         public List<string> ExcludeDirectories { get; set; } = new()
         {
             ".git", ".vs", ".nuke", ".github", "bin", "obj",
-            ".idea", "nupkg", ".packageguard", "node_modules"
+            ".idea", "nupkg", ".packageguard", "node_modules",
+            "test-repos", ".test-repos"
         };
 
         public List<string> ExcludeNamespaces { get; set; } = new()
