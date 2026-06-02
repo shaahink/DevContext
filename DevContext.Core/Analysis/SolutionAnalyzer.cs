@@ -21,8 +21,14 @@ public sealed class SolutionAnalyzer : IAnalyzer
         var directory = model.RootDirectory;
 
         var csprojFiles = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories)
-            .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)))
+            .Where(f =>
+            {
+                var rel = Path.GetRelativePath(directory, f);
+                return !_options.ExcludeDirectories.Any(ex => rel.Contains(ex));
+            })
             .ToList();
+
+        var dirProps = TryLoadDirectoryBuildProps(directory);
 
         var projects = new ConcurrentBag<ProjectModel>();
 
@@ -32,12 +38,14 @@ public sealed class SolutionAnalyzer : IAnalyzer
             {
                 using var stream = File.OpenRead(csproj);
                 var doc = await XDocument.LoadAsync(stream, LoadOptions.None, ct);
+
+                var tf = doc.Descendants("TargetFramework").FirstOrDefault()?.Value
+                      ?? doc.Descendants("TargetFrameworks").FirstOrDefault()?.Value?.Split(';').FirstOrDefault()
+                      ?? dirProps;
                 var projectModel = new ProjectModel
                 {
                     Name = Path.GetFileNameWithoutExtension(csproj),
-                    TargetFramework = doc.Descendants("TargetFramework").FirstOrDefault()?.Value
-                        ?? doc.Descendants("TargetFrameworks").FirstOrDefault()?.Value?.Split(';').FirstOrDefault()
-                        ?? "unknown"
+                    TargetFramework = tf ?? "unknown"
                 };
 
                 foreach (var pkg in doc.Descendants("PackageReference"))
@@ -74,5 +82,28 @@ public sealed class SolutionAnalyzer : IAnalyzer
         });
 
         model.Projects = projects.OrderBy(p => p.Name).ToList();
+    }
+
+    private static string? TryLoadDirectoryBuildProps(string directory)
+    {
+        try
+        {
+            var dirInfo = new DirectoryInfo(directory);
+            while (dirInfo != null)
+            {
+                var propsPath = Path.Combine(dirInfo.FullName, "Directory.Build.props");
+                if (File.Exists(propsPath))
+                {
+                    var doc = XDocument.Load(propsPath);
+                    return doc.Descendants("TargetFramework").FirstOrDefault()?.Value
+                        ?? doc.Descendants("TargetFrameworks").FirstOrDefault()?.Value?.Split(';').FirstOrDefault();
+                }
+                dirInfo = dirInfo.Parent;
+            }
+        }
+        catch
+        {
+        }
+        return null;
     }
 }

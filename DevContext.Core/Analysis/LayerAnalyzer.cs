@@ -15,8 +15,13 @@ public sealed class LayerAnalyzer : IAnalyzer
 
     public Task AnalyzeAsync(CodeModel model, CancellationToken ct = default)
     {
-        var csFiles = Directory.EnumerateFiles(model.RootDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !_options.ExcludeDirectories.Any(ex => f.Contains(ex)));
+        var root = model.RootDirectory;
+        var csFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(f =>
+            {
+                var rel = Path.GetRelativePath(root, f);
+                return !_options.ExcludeDirectories.Any(ex => rel.Contains(ex));
+            });
 
         var counts = new Dictionary<string, int>();
 

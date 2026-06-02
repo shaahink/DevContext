@@ -24,22 +24,35 @@ public sealed class AnalysisPipeline
         };
     }
 
-    public async Task<ExtractionResult> ExecuteAsync(string directory, IProgress<ExtractionProgress>? progress = null)
+    public async Task<PipelineResult> ExecuteAsync(string directory, IProgress<ExtractionProgress>? progress = null)
     {
         var model = new CodeModel
         {
             RootDirectory = directory
         };
 
-        // Load Roslyn workspace
+        // Load Roslyn workspace (optional — analyzers fall back to csproj scanning)
         var slnPath = Directory.EnumerateFiles(directory, "*.sln", SearchOption.TopDirectoryOnly).FirstOrDefault();
         if (slnPath != null)
         {
-            if (!MSBuildLocator.IsRegistered)
-                MSBuildLocator.RegisterDefaults();
+            try
+            {
+                if (!MSBuildLocator.IsRegistered)
+                    MSBuildLocator.RegisterDefaults();
 
-            var workspace = MSBuildWorkspace.Create();
-            model.Solution = await workspace.OpenSolutionAsync(slnPath);
+                using var workspace = MSBuildWorkspace.Create();
+                workspace.LoadMetadataForReferencedProjects = false;
+                workspace.SkipUnrecognizedProjects = true;
+
+                var openTask = workspace.OpenSolutionAsync(slnPath);
+                if (await Task.WhenAny(openTask, Task.Delay(TimeSpan.FromSeconds(15))) == openTask)
+                {
+                    model.Solution = openTask.Result;
+                }
+            }
+            catch
+            {
+            }
         }
 
         // Phase 1: Run all analyzers
@@ -90,6 +103,10 @@ public sealed class AnalysisPipeline
             PercentComplete = 100
         });
 
-        return new ExtractionResult("generic-dotnet", content);
+        return new PipelineResult
+        {
+            Model = model,
+            ExtractionResult = new ExtractionResult("generic-dotnet", content)
+        };
     }
 }

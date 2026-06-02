@@ -37,23 +37,24 @@ namespace DevContext.Core
             _options.ApplyDepthAndFocusRules();
 
             var pipeline = new AnalysisPipeline(_options);
-            var result = await pipeline.ExecuteAsync(directory, progress);
+            var pipelineResult = await pipeline.ExecuteAsync(directory, progress);
 
             stopwatch.Stop();
 
+            var extractionResult = pipelineResult.ExtractionResult;
             if (_options.ShowElapsedTime)
             {
-                var content = result.Content;
+                var content = extractionResult.Content;
                 content += $"\n\n---\n**Total Time**: {stopwatch.Elapsed.TotalSeconds:F2}s";
                 if (_options.ShowMemoryUsage)
                 {
                     var memoryMB = GC.GetTotalMemory(false) / (1024 * 1024);
                     content += $"\n**Memory Used**: {memoryMB}MB";
                 }
-                return new ExtractionResult(result.Id, content);
+                return new ExtractionResult(extractionResult.Id, content);
             }
 
-            return result;
+            return extractionResult;
         }
 
         private async Task TryDetectArchitectureAsync(string directory)
