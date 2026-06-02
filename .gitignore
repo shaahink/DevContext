@@ -201,3 +201,6 @@ experiments/*
 !experiments/BASELINE_ANALYSIS_TEMPLATE.md
 !experiments/outputs/
 experiments/outputs/*
+
+# Cloned test repositories (shallow clones for integration tests)
+.test-repos/

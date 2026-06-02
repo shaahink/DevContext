@@ -57,10 +57,6 @@ jobs:
           ./Artifacts/*
           ./TestResults/*.trx
 
-    # TODO: Add "Tool Validation" step once the CLI is more stable.
-    # Example: build the CLI then run it against CleanArchitecture or DntSite sample
-    # with standard --task profiles to guard context quality/scoping.
-
   publish-test-results:
     name: "Publish Tests Results"
     needs: [ build ]
@@ -82,10 +78,8 @@ jobs:
         comment_mode: always
         files: "artifacts/**/**/*.trx"
 
-  # Smoke test that the CLI tool builds and can actually run basic extractions.
-  # This protects the core value of the project (producing usable context).
-  tool-validation:
-    name: "CLI Tool Smoke Test"
+  integration-tests:
+    name: "Integration Tests"
     runs-on: windows-latest
     needs: [build]
 
@@ -97,24 +91,37 @@ jobs:
       with:
         dotnet-version: 9.0.x
 
-    - name: Restore & Build CLI
-      run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release
+    - name: Build Core + tests
+      run: dotnet build DevContext.Core.Tests/DevContext.Core.Tests.csproj -c Release
 
-    - name: Run smoke extraction on current solution
-      run: |
-        dotnet run --project DevContext.Cli -- extract . --task "quick architecture overview" --around "DevContext.Core" --no-progress -o smoke-test-context.md
-        if (-not (Test-Path smoke-test-context.md)) {
-          Write-Error "Smoke test failed: no output file produced"
-          exit 1
-        }
-        Write-Host "Smoke test passed. Output size: $((Get-Item smoke-test-context.md).Length) bytes"
+    - name: Run integration tests against real GitHub repos
+      run: dotnet test DevContext.Core.Tests/DevContext.Core.Tests.csproj --filter "FullyQualifiedName~Integration" -c Release --no-build --logger "trx;LogFileName=integration.trx"
+
+    - name: Upload integration test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: TestResults/*.trx
+
+  tool-validation:
+    name: "CLI Smoke Test"
+    runs-on: windows-latest
+    needs: [build]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET 9 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
 
     - name: Build CLI
-      run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release --no-restore
+      run: dotnet build DevContext.Cli/DevContext.Cli.csproj -c Release
 
-    - name: Smoke test - basic extraction on current solution
+    - name: Run smoke extraction
       run: |
         dotnet run --project DevContext.Cli -- extract . --task "architecture overview" --around "DevContext.Core" -o smoke-context.md --no-progress
         if (!(Test-Path smoke-context.md)) { exit 1 }
-        Write-Host "Tool produced output successfully"
-
+        Write-Host "Smoke test passed. Output size: $((Get-Item smoke-context.md).Length) bytes"
