@@ -114,23 +114,35 @@ class Build : NukeBuild
         .Executes(() =>
         {
             TestResultsDirectory.CreateOrCleanDirectory();
-            var project = Solution.GetProject("DevContext.Specs");
 
+            // Run unit / spec tests
+            var specsProj = Solution.GetProject("DevContext.Specs");
             DotNetTest(s => s
-                // We run tests in debug mode so that Fluent Assertions can show the names of variables
                 .SetConfiguration(Configuration.Debug)
-                // To prevent the machine language to affect tests sensitive to the current thread's culture
                 .SetProcessEnvironmentVariable("DOTNET_CLI_UI_LANGUAGE", "en-US")
                 .SetDataCollector("XPlat Code Coverage")
                 .SetCollectCoverage(true)
                 .SetCoverletOutputFormat(CoverletOutputFormat.cobertura)
                 .SetResultsDirectory(TestResultsDirectory)
-                .SetProjectFile(project)
-                .CombineWith(project.GetTargetFrameworks(),
+                .SetProjectFile(specsProj)
+                .CombineWith(specsProj.GetTargetFrameworks(),
                     (ss, framework) => ss
                         .SetFramework(framework)
                         .AddLoggers($"trx;LogFileName={framework}.trx")
                 ));
+        });
+
+    Target RunIntegrationTests => _ => _
+        .DependsOn(Compile)
+        .Executes(() =>
+        {
+            var coreTestProj = Solution.GetProject("DevContext.Core.Tests");
+            DotNetTest(s => s
+                .SetConfiguration(Configuration.Debug)
+                .SetProcessEnvironmentVariable("DOTNET_CLI_UI_LANGUAGE", "en-US")
+                .SetResultsDirectory(TestResultsDirectory)
+                .SetProjectFile(coreTestProj)
+                .AddLoggers($"trx;LogFileName=CoreIntegrationTests.trx"));
         });
 
     Target ApiChecks => _ => _
@@ -175,6 +187,7 @@ class Build : NukeBuild
         .DependsOn(CalculateNugetVersion)
         .DependsOn(ApiChecks)
         .DependsOn(GenerateCodeCoverageReport)
+        .DependsOn(RunIntegrationTests)
         .Executes(() =>
         {
             ReportSummary(s => s
